@@ -17,8 +17,8 @@
 ## Scope
 
 1. Open existing `.md` files
-2. Raw mode using `TextEditor`
-3. Rendered mode using `MarkdownView`
+2. Raw mode using the same CodeMirror 6 editor with syntax visible
+3. Rendered mode using CodeMirror 6 decorations in a `WKWebView`
 4. Raw/rendered toggle
 5. Save via `FileDocument`
 6. Dark/light mode follows system
@@ -45,9 +45,11 @@
 
 **App shell:** `DocumentGroup(newDocument:)` remains the simplest editable document app setup. Phase 1 does not customize the default new-document flow.
 
-**Raw mode:** Plain SwiftUI `TextEditor` bound to the document text.
+**Raw mode:** The same CodeMirror 6 editor instance with decorations disabled and a monospace theme.
 
-**Rendered mode:** Use `MarkdownView` from `https://github.com/LiYanan2004/MarkdownView`. This keeps Phase 1 fast to ship and gives much better markdown fidelity than native `AttributedString` rendering. A custom renderer can come later.
+**Rendered mode:** Use CodeMirror 6 in a `WKWebView`, keeping markdown as the source of truth and hiding syntax through decorations instead of rendering a separate preview document.
+
+**Editor bundle:** Keep a repo-local JS workspace that builds a checked-in `editor.js` bundle for Xcode to consume as a static app resource. Xcode does not run npm/bun.
 
 **Window behavior:** Stay with default document window behavior in Phase 1. No custom `NSWindow` bridging yet.
 
@@ -56,15 +58,16 @@
 ## Implementation Sequence
 
 1. **Document model + file associations** — switch to `UTType.markdown`, verify open/save for `.md` files.
-2. **Raw mode** — keep the editor simple with `TextEditor`.
-3. **Rendered mode** — add `MarkdownView` via Swift Package Manager and tune spacing/typography.
-4. **Mode toggle** — add a simple raw/rendered toggle, preferably in the standard toolbar.
-5. **Polish pass** — verify real markdown docs, dark/light mode, and basic multiwindow behavior.
+2. **Editor shell** — load the bundled CodeMirror 6 editor in `WKWebView` and connect the Swift/JS bridge.
+3. **Rendered decorations** — implement the initial markdown decoration set for headings, emphasis, links, lists, blockquotes, code fences, tasks, and horizontal rules.
+4. **Mode toggle** — switch the same editor instance between rendered and raw modes through compartment reconfiguration.
+5. **Polish pass** — tune typography/theme behavior and verify real markdown docs plus basic multiwindow behavior.
 
 ---
 
 ## Risks and Open Questions
 
-- **MarkdownView dependency.** Phase 1 now intentionally accepts a third-party dependency. Verify package integration and lock the exact dependency strategy before implementation.
-- **Rendered styling.** `MarkdownView` gives fidelity, but Specter still needs a restrained visual treatment so it feels document-like rather than blog-like.
+- **Decoration complexity.** The cursor/editing semantics have to stay correct while syntax is hidden. Keep atomic ranges separate from visible styling ranges.
+- **Bridge reliability.** Swift and JS must stay synchronized without feedback loops or trailing debounces that can leave `SpecterDocument.text` stale.
+- **Rendered styling.** The web view has to disappear visually so Specter still feels document-like rather than browser-like.
 - **Phase boundary discipline.** The biggest risk is re-expanding scope by pulling the launcher, formatting bar, or custom window behavior back into Phase 1.

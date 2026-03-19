@@ -4,7 +4,7 @@
 
 ## Product Overview
 
-Specter is a macOS document-based application built with SwiftUI. It is at the Xcode template stage — freshly created with no custom product logic yet.
+Specter is a macOS document-based application built with SwiftUI. It now opens markdown files into a `WKWebView`-hosted CodeMirror 6 editor that can switch between rendered and raw views.
 
 **Bundle ID:** `cloudnine.Specter`
 **Platform:** macOS (deployment target 26.2)
@@ -13,16 +13,19 @@ Specter is a macOS document-based application built with SwiftUI. It is at the X
 ## Systems
 
 ### App Shell (`SpecterApp`)
-The application entry point. Uses `DocumentGroup` to manage document lifecycle. Each document opens in its own window with a `ContentView`.
+The application entry point. Uses `DocumentGroup` to manage document lifecycle. Each document opens in its own window with a `DocumentView`.
 
 ### Document Model (`SpecterDocument`)
-A `FileDocument` conforming struct that holds a single `text: String` property. Reads and writes UTF-8 plain text files. Declares a custom UTType `com.example.plain-text` with file extension `.exampletext`. Default content is "Hello, world!".
+A `FileDocument` conforming struct that holds a single `text: String` property. Reads and writes UTF-8 markdown files and uses the markdown filename extension to determine its readable type. Default content is empty.
 
-### Content View (`ContentView`)
-A single `TextEditor` bound to the document's text property. No toolbar, no sidebar, no additional UI. This is the unmodified Xcode template view.
+### Document Surface (`DocumentView` + `EditorWebView`)
+A SwiftUI document view that owns the rendered/raw toggle and embeds a `WKWebView` bridge. The web view hosts a bundled CodeMirror 6 editor, keeping the markdown string as the native source of truth while rendered mode is produced through decorations.
+
+### Editor Bundle
+Static HTML/CSS/JS assets live under `specter/Resources/Editor`. A repo-local workspace under `tools/editor` pins the CodeMirror/esbuild dependencies and rebuilds the checked-in `editor.js` bundle.
 
 ### Asset Catalog
-Empty accent color and app icon slots. No custom assets.
+Accent color and app icon slots, plus bundled editor resources.
 
 ## System Diagram
 
@@ -33,11 +36,11 @@ Empty accent color and app icon slots. No custom assets.
 │  DocumentGroup(SpecterDocument)     │
 │         │                           │
 │         ▼                           │
-│  ┌─────────────────┐                │
-│  │   ContentView   │                │
-│  │   (TextEditor)  │                │
-│  └────────┬────────┘                │
-│           │ @Binding                │
+│  ┌───────────────────────────────┐  │
+│  │        DocumentView           │  │
+│  │  toolbar toggle + EditorView  │  │
+│  └───────────────┬───────────────┘  │
+│                  │ @Binding         │
 │           ▼                         │
 │  ┌─────────────────┐                │
 │  │ SpecterDocument  │               │
@@ -46,14 +49,14 @@ Empty accent color and app icon slots. No custom assets.
 │  └─────────────────┘                │
 │           │                         │
 │           ▼                         │
-│     .exampletext files (UTF-8)      │
+│          .md files (UTF-8)          │
 └─────────────────────────────────────┘
 ```
 
 ## State Summary
 
-- **Files:** 3 Swift source files, 1 Info.plist, 1 asset catalog
-- **Dependencies:** None (pure SwiftUI)
+- **Files:** SwiftUI document shell plus bundled editor resources
+- **Dependencies:** SwiftUI + WebKit at runtime, CodeMirror 6 + esbuild in the local editor workspace
 - **Tests:** None
 - **Build:** Single macOS target, sandboxed, read/write file access
-- **Maturity:** Template scaffold. No custom product behavior exists yet.
+- **Maturity:** Phase 1 custom document surface implemented.

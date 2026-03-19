@@ -1,0 +1,12 @@
+:root {
+  --text-primary: #f4eee8;
+  --text-muted: #a79a90;
+  --bg-primary: transparent;
+  --code-bg: rgba(255, 255, 255, 0.085);
+  --code-border: rgba(255, 255, 255, 0.05);
+  --link-color: #f1d3b2;
+  --link-underline: rgba(241, 211, 178, 0.26);
+  --blockquote-border: rgba(255, 219, 190, 0.18);
+  --divider-color: rgba(255, 255, 255, 0.09);
+  --selection-bg: rgba(255, 144, 112, 0.22);
+}

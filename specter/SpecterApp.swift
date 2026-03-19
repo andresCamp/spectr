@@ -11,7 +11,7 @@ import SwiftUI
 struct SpecterApp: App {
     var body: some Scene {
         DocumentGroup(newDocument: SpecterDocument()) { file in
-            ContentView(document: file.$document)
+            DocumentView(document: file.$document)
         }
     }
 }

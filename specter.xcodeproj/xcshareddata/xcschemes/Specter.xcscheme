@@ -18,7 +18,7 @@
                BlueprintIdentifier = "1D95481C2F6B623E00D81715"
                BuildableName = "specter.app"
                BlueprintName = "specter"
-               ReferencedContainer = "container:Specter.xcodeproj">
+               ReferencedContainer = "container:specter.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -47,7 +47,7 @@
             BlueprintIdentifier = "1D95481C2F6B623E00D81715"
             BuildableName = "specter.app"
             BlueprintName = "specter"
-            ReferencedContainer = "container:Specter.xcodeproj">
+            ReferencedContainer = "container:specter.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -64,7 +64,7 @@
             BlueprintIdentifier = "1D95481C2F6B623E00D81715"
             BuildableName = "specter.app"
             BlueprintName = "specter"
-            ReferencedContainer = "container:Specter.xcodeproj">
+            ReferencedContainer = "container:specter.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

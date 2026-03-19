@@ -11,13 +11,16 @@ import UniformTypeIdentifiers
 nonisolated struct SpecterDocument: FileDocument {
     var text: String
 
-    init(text: String = "Hello, world!") {
+    init(text: String = "") {
         self.text = text
     }
 
-    static let readableContentTypes = [
-        UTType(importedAs: "com.example.plain-text")
-    ]
+    static var readableContentTypes: [UTType] {
+        if let markdown = UTType(filenameExtension: "md") {
+            return [markdown]
+        }
+        return [.plainText]
+    }
 
     init(configuration: ReadConfiguration) throws {
         guard let data = configuration.file.regularFileContents,
@@ -29,7 +32,7 @@ nonisolated struct SpecterDocument: FileDocument {
     }
     
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        let data = text.data(using: .utf8)!
+        let data = Data(text.utf8)
         return .init(regularFileWithContents: data)
     }
 }

@@ -21,10 +21,10 @@ They don't need another editor. They need a dedicated surface for the document t
 Specter has one view with two modes, toggled by a single button that is always accessible.
 
 ### Raw Mode
-An editable markdown surface (TextEditor). Plain text. You see the markdown syntax. You type, you fix a line, you move on. This is not a full editor — no syntax highlighting, no vim bindings, no autocomplete. It's a text field for quick edits.
+An editable markdown surface where the same underlying document is shown with syntax visible. You see the markdown source, make the exact fix you need, and move on. It should feel restrained and source-first rather than like a general-purpose IDE.
 
 ### Rendered Mode
-A clean, read-only document view. Phase 1 uses `MarkdownView` for markdown rendering so Specter can ship with strong markdown fidelity quickly. A custom renderer can come later if the product needs more control. The document should look like a sheet of paper — clean typography, generous spacing, thoughtful hierarchy. Not "rendered HTML in a web view."
+A clean rendered document surface that is still editing the underlying markdown source. Phase 1 uses CodeMirror 6 decorations inside a `WKWebView` so markdown stays the source of truth while syntax is visually hidden. The document should look like a sheet of paper — clean typography, generous spacing, thoughtful hierarchy. Not "rendered HTML in a web view."
 
 ### Toggle
 One button. Press it, the mode switches instantly. No animation delay. No split view. You're either reading or editing. That's it.
@@ -58,8 +58,8 @@ A pin icon in the title bar toggles float-on-top mode. When active, the Specter 
 
 1. **New window** — ⌘N creates a new empty spec window
 2. **Open file** — Open any .md file from disk
-3. **Edit markdown** — Raw mode with TextEditor
-4. **Render markdown** — Rendered mode with MarkdownView in Phase 1
+3. **Edit markdown** — Raw mode with visible markdown syntax
+4. **Render markdown** — Rendered mode with editable CodeMirror 6 decorations in Phase 1
 5. **Toggle modes** — Single button switches between raw and rendered, always accessible
 6. **Save file** — Standard ⌘S, backed by FileDocument
 7. **Breadcrumb navigation** — File path in rendered view, clickable folder segments
@@ -127,10 +127,10 @@ Specter is the middle layer. It doesn't replace either side. It exists because t
 - **SwiftUI** — Declarative UI, modern macOS framework
 - **FileDocument** — Value-type document model, system-managed lifecycle
 - **WindowGroup** — Each document gets its own native window
-- **MarkdownView** — Phase 1 markdown rendering; custom renderer can come later
-- **TextEditor** — Native text editing for raw mode
+- **WKWebView** — Native shell for the bundled browser editor surface
+- **CodeMirror 6** — Shared editor engine for both raw and rendered modes
 - **macOS only** — No iOS, no iPadOS, no cross-platform
-- **Minimal dependencies** — Phase 1 permits `MarkdownView` to accelerate shipping
+- **Minimal dependencies** — Phase 1 keeps web dependencies build-time only and ships a checked-in editor bundle inside the app
 - **Sandboxed** — Read/write file access via system file dialogs
 
 ## Roadmap
@@ -141,7 +141,7 @@ The ten features listed above. The goal is a functional, opinionated spec viewer
 ### Future Considerations (not committed)
 - **Auto-reload** — Watch the file on disk and reload when it changes externally (e.g., when Claude Code writes to a spec). This is high-value for the terminal workflow.
 - **Typography refinements** — Custom font choices, adjustable spacing, reader-mode polish.
-- **Custom markdown renderer** — Replace `MarkdownView` with a more opinionated in-house renderer if Specter outgrows the dependency.
+- **Decoration coverage refinements** — Expand markdown coverage and editing semantics as the rendered surface matures.
 - **Keyboard-driven navigation** — Full keyboard flow for breadcrumb and card switcher.
 - **Window state persistence** — Remember window positions and open documents across launches.
 - **Custom file association** — Own the .md extension or a custom extension for spec files.

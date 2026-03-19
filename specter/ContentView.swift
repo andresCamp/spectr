@@ -7,14 +7,13 @@
 
 import SwiftUI
 
+// Keep the template-era entrypoint available because Xcode's
+// filesystem-synced project metadata can temporarily retain stale
+// references to the old file during reloads.
 struct ContentView: View {
     @Binding var document: SpecterDocument
 
     var body: some View {
-        TextEditor(text: $document.text)
+        DocumentView(document: $document)
     }
-}
-
-#Preview {
-    ContentView(document: .constant(SpecterDocument()))
 }

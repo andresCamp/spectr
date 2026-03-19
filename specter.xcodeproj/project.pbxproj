@@ -7,26 +7,26 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		1D95481D2F6B623E00D81715 /* Specter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Specter.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1D95481D2F6B623E00D81715 /* specter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = specter.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		1D9548292F6B624000D81715 /* Exceptions for "Specter" folder in "Specter" target */ = {
+		1D9548292F6B624000D81715 /* Exceptions for "specter" folder in "specter" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
 			);
-			target = 1D95481C2F6B623E00D81715 /* Specter */;
+			target = 1D95481C2F6B623E00D81715 /* specter */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		1D95481F2F6B623E00D81715 /* Specter */ = {
+		1D95481F2F6B623E00D81715 /* specter */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				1D9548292F6B624000D81715 /* Exceptions for "Specter" folder in "Specter" target */,
+				1D9548292F6B624000D81715 /* Exceptions for "specter" folder in "specter" target */,
 			);
-			path = Specter;
+			path = specter;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -45,7 +45,7 @@
 		1D9548142F6B623E00D81715 = {
 			isa = PBXGroup;
 			children = (
-				1D95481F2F6B623E00D81715 /* Specter */,
+				1D95481F2F6B623E00D81715 /* specter */,
 				1D95481E2F6B623E00D81715 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -53,7 +53,7 @@
 		1D95481E2F6B623E00D81715 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				1D95481D2F6B623E00D81715 /* Specter.app */,
+				1D95481D2F6B623E00D81715 /* specter.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -61,9 +61,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		1D95481C2F6B623E00D81715 /* Specter */ = {
+		1D95481C2F6B623E00D81715 /* specter */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 1D95482A2F6B624000D81715 /* Build configuration list for PBXNativeTarget "Specter" */;
+			buildConfigurationList = 1D95482A2F6B624000D81715 /* Build configuration list for PBXNativeTarget "specter" */;
 			buildPhases = (
 				1D9548192F6B623E00D81715 /* Sources */,
 				1D95481A2F6B623E00D81715 /* Frameworks */,
@@ -74,13 +74,13 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				1D95481F2F6B623E00D81715 /* Specter */,
+				1D95481F2F6B623E00D81715 /* specter */,
 			);
-			name = Specter;
+			name = specter;
 			packageProductDependencies = (
 			);
 			productName = Specter;
-			productReference = 1D95481D2F6B623E00D81715 /* Specter.app */;
+			productReference = 1D95481D2F6B623E00D81715 /* specter.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -98,7 +98,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 1D9548182F6B623E00D81715 /* Build configuration list for PBXProject "Specter" */;
+			buildConfigurationList = 1D9548182F6B623E00D81715 /* Build configuration list for PBXProject "specter" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -112,7 +112,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				1D95481C2F6B623E00D81715 /* Specter */,
+				1D95481C2F6B623E00D81715 /* specter */,
 			);
 		};
 /* End PBXProject section */
@@ -321,7 +321,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		1D9548182F6B623E00D81715 /* Build configuration list for PBXProject "Specter" */ = {
+		1D9548182F6B623E00D81715 /* Build configuration list for PBXProject "specter" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				1D95482D2F6B624000D81715 /* Debug */,
@@ -330,7 +330,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		1D95482A2F6B624000D81715 /* Build configuration list for PBXNativeTarget "Specter" */ = {
+		1D95482A2F6B624000D81715 /* Build configuration list for PBXNativeTarget "specter" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				1D95482B2F6B624000D81715 /* Debug */,

@@ -11,7 +11,14 @@ import SwiftUI
 struct SpecterApp: App {
     var body: some Scene {
         DocumentGroup(newDocument: SpecterDocument()) { file in
-            DocumentView(document: file.$document)
+            DocumentView(
+                fileURL: file.fileURL,
+                document: file.$document
+            )
+        }
+        .windowToolbarStyle(.unifiedCompact)
+        .commands {
+            EditorTextSizeCommands()
         }
     }
 }

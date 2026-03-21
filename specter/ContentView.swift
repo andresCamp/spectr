@@ -11,9 +11,13 @@ import SwiftUI
 // filesystem-synced project metadata can temporarily retain stale
 // references to the old file during reloads.
 struct ContentView: View {
+    let fileURL: URL?
     @Binding var document: SpecterDocument
 
     var body: some View {
-        DocumentView(document: $document)
+        DocumentView(
+            fileURL: fileURL,
+            document: $document
+        )
     }
 }

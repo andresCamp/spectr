@@ -11979,6 +11979,32 @@
     }
   }));
   var UnicodeRegexpSupport = /x/.unicode != null ? "gu" : "g";
+  function highlightActiveLine() {
+    return activeLineHighlighter;
+  }
+  var lineDeco = /* @__PURE__ */ Decoration.line({ class: "cm-activeLine" });
+  var activeLineHighlighter = /* @__PURE__ */ ViewPlugin.fromClass(class {
+    constructor(view2) {
+      this.decorations = this.getDeco(view2);
+    }
+    update(update) {
+      if (update.docChanged || update.selectionSet)
+        this.decorations = this.getDeco(update.view);
+    }
+    getDeco(view2) {
+      let lastLineStart = -1, deco = [];
+      for (let r of view2.state.selection.ranges) {
+        let line = view2.lineBlockAt(r.head);
+        if (line.from > lastLineStart) {
+          deco.push(lineDeco.range(line.from));
+          lastLineStart = line.from;
+        }
+      }
+      return Decoration.set(deco);
+    }
+  }, {
+    decorations: (v) => v.decorations
+  });
   var baseTheme = /* @__PURE__ */ EditorView.baseTheme({
     ".cm-tooltip": {
       zIndex: 500,
@@ -12066,6 +12092,440 @@
   GutterMarker.prototype.mapMode = MapMode.TrackBefore;
   GutterMarker.prototype.startSide = GutterMarker.prototype.endSide = -1;
   GutterMarker.prototype.point = true;
+  var gutterLineClass = /* @__PURE__ */ Facet.define();
+  var gutterWidgetClass = /* @__PURE__ */ Facet.define();
+  var activeGutters = /* @__PURE__ */ Facet.define();
+  var unfixGutters = /* @__PURE__ */ Facet.define({
+    combine: (values2) => values2.some((x) => x)
+  });
+  function gutters(config) {
+    let result = [
+      gutterView
+    ];
+    if (config && config.fixed === false)
+      result.push(unfixGutters.of(true));
+    return result;
+  }
+  var gutterView = /* @__PURE__ */ ViewPlugin.fromClass(class {
+    constructor(view2) {
+      this.view = view2;
+      this.domAfter = null;
+      this.prevViewport = view2.viewport;
+      this.dom = document.createElement("div");
+      this.dom.className = "cm-gutters cm-gutters-before";
+      this.dom.setAttribute("aria-hidden", "true");
+      this.dom.style.minHeight = this.view.contentHeight / this.view.scaleY + "px";
+      this.gutters = view2.state.facet(activeGutters).map((conf) => new SingleGutterView(view2, conf));
+      this.fixed = !view2.state.facet(unfixGutters);
+      for (let gutter2 of this.gutters) {
+        if (gutter2.config.side == "after")
+          this.getDOMAfter().appendChild(gutter2.dom);
+        else
+          this.dom.appendChild(gutter2.dom);
+      }
+      if (this.fixed) {
+        this.dom.style.position = "sticky";
+      }
+      this.syncGutters(false);
+      view2.scrollDOM.insertBefore(this.dom, view2.contentDOM);
+    }
+    getDOMAfter() {
+      if (!this.domAfter) {
+        this.domAfter = document.createElement("div");
+        this.domAfter.className = "cm-gutters cm-gutters-after";
+        this.domAfter.setAttribute("aria-hidden", "true");
+        this.domAfter.style.minHeight = this.view.contentHeight / this.view.scaleY + "px";
+        this.domAfter.style.position = this.fixed ? "sticky" : "";
+        this.view.scrollDOM.appendChild(this.domAfter);
+      }
+      return this.domAfter;
+    }
+    update(update) {
+      if (this.updateGutters(update)) {
+        let vpA = this.prevViewport, vpB = update.view.viewport;
+        let vpOverlap = Math.min(vpA.to, vpB.to) - Math.max(vpA.from, vpB.from);
+        this.syncGutters(vpOverlap < (vpB.to - vpB.from) * 0.8);
+      }
+      if (update.geometryChanged) {
+        let min = this.view.contentHeight / this.view.scaleY + "px";
+        this.dom.style.minHeight = min;
+        if (this.domAfter)
+          this.domAfter.style.minHeight = min;
+      }
+      if (this.view.state.facet(unfixGutters) != !this.fixed) {
+        this.fixed = !this.fixed;
+        this.dom.style.position = this.fixed ? "sticky" : "";
+        if (this.domAfter)
+          this.domAfter.style.position = this.fixed ? "sticky" : "";
+      }
+      this.prevViewport = update.view.viewport;
+    }
+    syncGutters(detach) {
+      let after = this.dom.nextSibling;
+      if (detach) {
+        this.dom.remove();
+        if (this.domAfter)
+          this.domAfter.remove();
+      }
+      let lineClasses = RangeSet.iter(this.view.state.facet(gutterLineClass), this.view.viewport.from);
+      let classSet = [];
+      let contexts = this.gutters.map((gutter2) => new UpdateContext(gutter2, this.view.viewport, -this.view.documentPadding.top));
+      for (let line of this.view.viewportLineBlocks) {
+        if (classSet.length)
+          classSet = [];
+        if (Array.isArray(line.type)) {
+          let first = true;
+          for (let b of line.type) {
+            if (b.type == BlockType.Text && first) {
+              advanceCursor(lineClasses, classSet, b.from);
+              for (let cx of contexts)
+                cx.line(this.view, b, classSet);
+              first = false;
+            } else if (b.widget) {
+              for (let cx of contexts)
+                cx.widget(this.view, b);
+            }
+          }
+        } else if (line.type == BlockType.Text) {
+          advanceCursor(lineClasses, classSet, line.from);
+          for (let cx of contexts)
+            cx.line(this.view, line, classSet);
+        } else if (line.widget) {
+          for (let cx of contexts)
+            cx.widget(this.view, line);
+        }
+      }
+      for (let cx of contexts)
+        cx.finish();
+      if (detach) {
+        this.view.scrollDOM.insertBefore(this.dom, after);
+        if (this.domAfter)
+          this.view.scrollDOM.appendChild(this.domAfter);
+      }
+    }
+    updateGutters(update) {
+      let prev = update.startState.facet(activeGutters), cur = update.state.facet(activeGutters);
+      let change = update.docChanged || update.heightChanged || update.viewportChanged || !RangeSet.eq(update.startState.facet(gutterLineClass), update.state.facet(gutterLineClass), update.view.viewport.from, update.view.viewport.to);
+      if (prev == cur) {
+        for (let gutter2 of this.gutters)
+          if (gutter2.update(update))
+            change = true;
+      } else {
+        change = true;
+        let gutters2 = [];
+        for (let conf of cur) {
+          let known = prev.indexOf(conf);
+          if (known < 0) {
+            gutters2.push(new SingleGutterView(this.view, conf));
+          } else {
+            this.gutters[known].update(update);
+            gutters2.push(this.gutters[known]);
+          }
+        }
+        for (let g of this.gutters) {
+          g.dom.remove();
+          if (gutters2.indexOf(g) < 0)
+            g.destroy();
+        }
+        for (let g of gutters2) {
+          if (g.config.side == "after")
+            this.getDOMAfter().appendChild(g.dom);
+          else
+            this.dom.appendChild(g.dom);
+        }
+        this.gutters = gutters2;
+      }
+      return change;
+    }
+    destroy() {
+      for (let view2 of this.gutters)
+        view2.destroy();
+      this.dom.remove();
+      if (this.domAfter)
+        this.domAfter.remove();
+    }
+  }, {
+    provide: (plugin) => EditorView.scrollMargins.of((view2) => {
+      let value = view2.plugin(plugin);
+      if (!value || value.gutters.length == 0 || !value.fixed)
+        return null;
+      let before = value.dom.offsetWidth * view2.scaleX, after = value.domAfter ? value.domAfter.offsetWidth * view2.scaleX : 0;
+      return view2.textDirection == Direction.LTR ? { left: before, right: after } : { right: before, left: after };
+    })
+  });
+  function asArray2(val) {
+    return Array.isArray(val) ? val : [val];
+  }
+  function advanceCursor(cursor, collect, pos) {
+    while (cursor.value && cursor.from <= pos) {
+      if (cursor.from == pos)
+        collect.push(cursor.value);
+      cursor.next();
+    }
+  }
+  var UpdateContext = class {
+    constructor(gutter2, viewport, height) {
+      this.gutter = gutter2;
+      this.height = height;
+      this.i = 0;
+      this.cursor = RangeSet.iter(gutter2.markers, viewport.from);
+    }
+    addElement(view2, block, markers) {
+      let { gutter: gutter2 } = this, above = (block.top - this.height) / view2.scaleY, height = block.height / view2.scaleY;
+      if (this.i == gutter2.elements.length) {
+        let newElt = new GutterElement(view2, height, above, markers);
+        gutter2.elements.push(newElt);
+        gutter2.dom.appendChild(newElt.dom);
+      } else {
+        gutter2.elements[this.i].update(view2, height, above, markers);
+      }
+      this.height = block.bottom;
+      this.i++;
+    }
+    line(view2, line, extraMarkers) {
+      let localMarkers = [];
+      advanceCursor(this.cursor, localMarkers, line.from);
+      if (extraMarkers.length)
+        localMarkers = localMarkers.concat(extraMarkers);
+      let forLine = this.gutter.config.lineMarker(view2, line, localMarkers);
+      if (forLine)
+        localMarkers.unshift(forLine);
+      let gutter2 = this.gutter;
+      if (localMarkers.length == 0 && !gutter2.config.renderEmptyElements)
+        return;
+      this.addElement(view2, line, localMarkers);
+    }
+    widget(view2, block) {
+      let marker = this.gutter.config.widgetMarker(view2, block.widget, block), markers = marker ? [marker] : null;
+      for (let cls of view2.state.facet(gutterWidgetClass)) {
+        let marker2 = cls(view2, block.widget, block);
+        if (marker2)
+          (markers || (markers = [])).push(marker2);
+      }
+      if (markers)
+        this.addElement(view2, block, markers);
+    }
+    finish() {
+      let gutter2 = this.gutter;
+      while (gutter2.elements.length > this.i) {
+        let last = gutter2.elements.pop();
+        gutter2.dom.removeChild(last.dom);
+        last.destroy();
+      }
+    }
+  };
+  var SingleGutterView = class {
+    constructor(view2, config) {
+      this.view = view2;
+      this.config = config;
+      this.elements = [];
+      this.spacer = null;
+      this.dom = document.createElement("div");
+      this.dom.className = "cm-gutter" + (this.config.class ? " " + this.config.class : "");
+      for (let prop in config.domEventHandlers) {
+        this.dom.addEventListener(prop, (event) => {
+          let target = event.target, y;
+          if (target != this.dom && this.dom.contains(target)) {
+            while (target.parentNode != this.dom)
+              target = target.parentNode;
+            let rect = target.getBoundingClientRect();
+            y = (rect.top + rect.bottom) / 2;
+          } else {
+            y = event.clientY;
+          }
+          let line = view2.lineBlockAtHeight(y - view2.documentTop);
+          if (config.domEventHandlers[prop](view2, line, event))
+            event.preventDefault();
+        });
+      }
+      this.markers = asArray2(config.markers(view2));
+      if (config.initialSpacer) {
+        this.spacer = new GutterElement(view2, 0, 0, [config.initialSpacer(view2)]);
+        this.dom.appendChild(this.spacer.dom);
+        this.spacer.dom.style.cssText += "visibility: hidden; pointer-events: none";
+      }
+    }
+    update(update) {
+      let prevMarkers = this.markers;
+      this.markers = asArray2(this.config.markers(update.view));
+      if (this.spacer && this.config.updateSpacer) {
+        let updated = this.config.updateSpacer(this.spacer.markers[0], update);
+        if (updated != this.spacer.markers[0])
+          this.spacer.update(update.view, 0, 0, [updated]);
+      }
+      let vp = update.view.viewport;
+      return !RangeSet.eq(this.markers, prevMarkers, vp.from, vp.to) || (this.config.lineMarkerChange ? this.config.lineMarkerChange(update) : false);
+    }
+    destroy() {
+      for (let elt2 of this.elements)
+        elt2.destroy();
+    }
+  };
+  var GutterElement = class {
+    constructor(view2, height, above, markers) {
+      this.height = -1;
+      this.above = 0;
+      this.markers = [];
+      this.dom = document.createElement("div");
+      this.dom.className = "cm-gutterElement";
+      this.update(view2, height, above, markers);
+    }
+    update(view2, height, above, markers) {
+      if (this.height != height) {
+        this.height = height;
+        this.dom.style.height = height + "px";
+      }
+      if (this.above != above)
+        this.dom.style.marginTop = (this.above = above) ? above + "px" : "";
+      if (!sameMarkers(this.markers, markers))
+        this.setMarkers(view2, markers);
+    }
+    setMarkers(view2, markers) {
+      let cls = "cm-gutterElement", domPos = this.dom.firstChild;
+      for (let iNew = 0, iOld = 0; ; ) {
+        let skipTo = iOld, marker = iNew < markers.length ? markers[iNew++] : null, matched = false;
+        if (marker) {
+          let c = marker.elementClass;
+          if (c)
+            cls += " " + c;
+          for (let i = iOld; i < this.markers.length; i++)
+            if (this.markers[i].compare(marker)) {
+              skipTo = i;
+              matched = true;
+              break;
+            }
+        } else {
+          skipTo = this.markers.length;
+        }
+        while (iOld < skipTo) {
+          let next = this.markers[iOld++];
+          if (next.toDOM) {
+            next.destroy(domPos);
+            let after = domPos.nextSibling;
+            domPos.remove();
+            domPos = after;
+          }
+        }
+        if (!marker)
+          break;
+        if (marker.toDOM) {
+          if (matched)
+            domPos = domPos.nextSibling;
+          else
+            this.dom.insertBefore(marker.toDOM(view2), domPos);
+        }
+        if (matched)
+          iOld++;
+      }
+      this.dom.className = cls;
+      this.markers = markers;
+    }
+    destroy() {
+      this.setMarkers(null, []);
+    }
+  };
+  function sameMarkers(a, b) {
+    if (a.length != b.length)
+      return false;
+    for (let i = 0; i < a.length; i++)
+      if (!a[i].compare(b[i]))
+        return false;
+    return true;
+  }
+  var lineNumberMarkers = /* @__PURE__ */ Facet.define();
+  var lineNumberWidgetMarker = /* @__PURE__ */ Facet.define();
+  var lineNumberConfig = /* @__PURE__ */ Facet.define({
+    combine(values2) {
+      return combineConfig(values2, { formatNumber: String, domEventHandlers: {} }, {
+        domEventHandlers(a, b) {
+          let result = Object.assign({}, a);
+          for (let event in b) {
+            let exists = result[event], add = b[event];
+            result[event] = exists ? (view2, line, event2) => exists(view2, line, event2) || add(view2, line, event2) : add;
+          }
+          return result;
+        }
+      });
+    }
+  });
+  var NumberMarker = class extends GutterMarker {
+    constructor(number2) {
+      super();
+      this.number = number2;
+    }
+    eq(other) {
+      return this.number == other.number;
+    }
+    toDOM() {
+      return document.createTextNode(this.number);
+    }
+  };
+  function formatNumber(view2, number2) {
+    return view2.state.facet(lineNumberConfig).formatNumber(number2, view2.state);
+  }
+  var lineNumberGutter = /* @__PURE__ */ activeGutters.compute([lineNumberConfig], (state) => ({
+    class: "cm-lineNumbers",
+    renderEmptyElements: false,
+    markers(view2) {
+      return view2.state.facet(lineNumberMarkers);
+    },
+    lineMarker(view2, line, others) {
+      if (others.some((m) => m.toDOM))
+        return null;
+      return new NumberMarker(formatNumber(view2, view2.state.doc.lineAt(line.from).number));
+    },
+    widgetMarker: (view2, widget, block) => {
+      for (let m of view2.state.facet(lineNumberWidgetMarker)) {
+        let result = m(view2, widget, block);
+        if (result)
+          return result;
+      }
+      return null;
+    },
+    lineMarkerChange: (update) => update.startState.facet(lineNumberConfig) != update.state.facet(lineNumberConfig),
+    initialSpacer(view2) {
+      return new NumberMarker(formatNumber(view2, maxLineNumber(view2.state.doc.lines)));
+    },
+    updateSpacer(spacer, update) {
+      let max = formatNumber(update.view, maxLineNumber(update.view.state.doc.lines));
+      return max == spacer.number ? spacer : new NumberMarker(max);
+    },
+    domEventHandlers: state.facet(lineNumberConfig).domEventHandlers,
+    side: "before"
+  }));
+  function lineNumbers(config = {}) {
+    return [
+      lineNumberConfig.of(config),
+      gutters(),
+      lineNumberGutter
+    ];
+  }
+  function maxLineNumber(lines) {
+    let last = 9;
+    while (last < lines)
+      last = last * 10 + 9;
+    return last;
+  }
+  var activeLineGutterMarker = /* @__PURE__ */ new class extends GutterMarker {
+    constructor() {
+      super(...arguments);
+      this.elementClass = "cm-activeLineGutter";
+    }
+  }();
+  var activeLineGutterHighlighter = /* @__PURE__ */ gutterLineClass.compute(["selection"], (state) => {
+    let marks2 = [], last = -1;
+    for (let range of state.selection.ranges) {
+      let linePos = state.doc.lineAt(range.head).from;
+      if (linePos > last) {
+        last = linePos;
+        marks2.push(activeLineGutterMarker.range(linePos));
+      }
+    }
+    return RangeSet.of(marks2);
+  });
+  function highlightActiveLineGutter() {
+    return activeLineGutterHighlighter;
+  }
 
   // node_modules/@lezer/common/dist/index.js
   var DefaultBufferLength = 1024;
@@ -17507,7 +17967,7 @@
       });
     }
   };
-  var Element = class {
+  var Element2 = class {
     /**
     @internal
     */
@@ -17555,7 +18015,7 @@
     }
   };
   function elt(type, from, to, children) {
-    return new Element(type, from, to, children);
+    return new Element2(type, from, to, children);
   }
   var EmphasisUnderscore = { resolve: "Emphasis", mark: "EmphasisMark" };
   var EmphasisAsterisk = { resolve: "Emphasis", mark: "EmphasisMark" };
@@ -17901,7 +18361,7 @@
         if (open.type.mark)
           content2.push(this.elt(open.type.mark, start, open.to));
         for (let k = j + 1; k < i; k++) {
-          if (this.parts[k] instanceof Element)
+          if (this.parts[k] instanceof Element2)
             content2.push(this.parts[k]);
           this.parts[k] = null;
         }
@@ -17918,7 +18378,7 @@
       let result = [];
       for (let i = from; i < this.parts.length; i++) {
         let part = this.parts[i];
-        if (part instanceof Element)
+        if (part instanceof Element2)
           result.push(part);
       }
       return result;
@@ -17985,8 +18445,8 @@
         eI++;
       if (eI < elts.length && elts[eI].from < mark.from) {
         let e = elts[eI];
-        if (e instanceof Element)
-          elts[eI] = new Element(e.type, e.from, e.to, injectMarks(e.children, [mark]));
+        if (e instanceof Element2)
+          elts[eI] = new Element2(e.type, e.from, e.to, injectMarks(e.children, [mark]));
       } else {
         elts.splice(eI++, 0, mark);
       }
@@ -20191,7 +20651,7 @@
   var IncompleteTag = 14;
   var IncompleteCloseTag = 15;
   var commentContent$1 = 59;
-  var Element2 = 21;
+  var Element3 = 21;
   var TagName = 23;
   var Attribute = 24;
   var AttributeName = 25;
@@ -20318,7 +20778,7 @@
       return startTagTerms.indexOf(term) > -1 ? new ElementContext(tagNameAfter(input, 1) || "", context) : context;
     },
     reduce(context, term) {
-      return term == Element2 && context ? context.parent : context;
+      return term == Element3 && context ? context.parent : context;
     },
     reuse(context, node, stack, input) {
       let type = node.type.id;
@@ -20482,7 +20942,7 @@
       if (id2 == ScriptText) return maybeNest(node, input, script);
       if (id2 == StyleText) return maybeNest(node, input, style);
       if (id2 == TextareaText) return maybeNest(node, input, textarea);
-      if (id2 == Element2 && other.length) {
+      if (id2 == Element3 && other.length) {
         let n = node.node, open = n.firstChild, tagName = open && findTagName(open, input), attrs2;
         if (tagName) for (let tag of other) {
           if (tag.tag == tagName && (!tag.attrs || tag.attrs(attrs2 || (attrs2 = getAttrs2(open, input))))) {
@@ -24254,10 +24714,32 @@
 
   // src/editor.js
   var fromSwiftAnnotation = Annotation.define();
+  var autoAdvanceHorizontalRuleAnnotation = Annotation.define();
   var decorationCompartment = new Compartment();
   var themeCompartment = new Compartment();
   var modeClassCompartment = new Compartment();
+  var layoutClassCompartment = new Compartment();
+  var gutterCompartment = new Compartment();
+  var activeLineCompartment = new Compartment();
+  var scrollBehaviorCompartment = new Compartment();
   var currentMode = "rendered";
+  var customTaskPattern = /^(\s*)(\[\]|\[(?:x|X)\])(\s+)/;
+  var bareDomainPattern = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:\/[^\s<]*)?/gi;
+  var horizontalRulePattern = /^\s{0,3}(?:(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,})$/;
+  var blockedLineWidgetContexts = /* @__PURE__ */ new Set([
+    "CodeBlock",
+    "CodeText",
+    "Comment",
+    "CommentBlock",
+    "FencedCode",
+    "HTMLBlock",
+    "HTMLTag",
+    "InlineCode",
+    "ProcessingInstruction",
+    "ProcessingInstructionBlock"
+  ]);
+  var minimumTextScale = 11 / 15;
+  var maximumTextScale = 2;
   function safePostMessage(name2, body) {
     const handler = globalThis.webkit?.messageHandlers?.[name2];
     if (!handler) {
@@ -24293,7 +24775,7 @@
         return buildRenderArtifacts(state);
       },
       update(value, transaction) {
-        if (!transaction.docChanged) {
+        if (!transaction.docChanged && !transaction.selection) {
           return value;
         }
         return buildRenderArtifacts(transaction.state);
@@ -24309,7 +24791,10 @@
   function buildRenderArtifacts(state) {
     const decorations2 = [];
     const atomicRanges2 = [];
-    syntaxTree(state).iterate({
+    const standardTaskLines = /* @__PURE__ */ new Set();
+    const renderedListLines = /* @__PURE__ */ new Set();
+    const tree = syntaxTree(state);
+    tree.iterate({
       enter(node) {
         switch (node.name) {
           case "ATXHeading1":
@@ -24332,8 +24817,18 @@
           case "Link":
             decorateLink(decorations2, atomicRanges2, node, state);
             break;
+          case "URL":
+            decorateUrl(decorations2, node, state);
+            break;
           case "ListItem":
-            decorateListItem(decorations2, atomicRanges2, node, state);
+            decorateListItem(
+              decorations2,
+              atomicRanges2,
+              node,
+              state,
+              standardTaskLines,
+              renderedListLines
+            );
             break;
           case "Blockquote":
             decorateBlockquote(decorations2, atomicRanges2, node, state);
@@ -24342,17 +24837,52 @@
             decorateFencedCode(decorations2, atomicRanges2, node, state);
             break;
           case "HorizontalRule":
-            decorateHorizontalRule(decorations2, atomicRanges2, node);
+            decorateHorizontalRule(decorations2, atomicRanges2, node, state);
             break;
           default:
             break;
         }
       }
     });
+    decorateBareTaskLines(decorations2, atomicRanges2, state, tree, standardTaskLines);
+    decoratePendingListLines(decorations2, atomicRanges2, state, tree, renderedListLines);
+    decorateBareDomains(decorations2, state, tree);
     return {
       decorations: Decoration.set(decorations2, true),
       atomicRanges: Decoration.set(atomicRanges2, true)
     };
+  }
+  function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+  }
+  function getWheelLineUnits(event, view2) {
+    const lineHeight = Math.max(1, view2.defaultLineHeight || 1);
+    switch (event.deltaMode) {
+      case WheelEvent.DOM_DELTA_LINE:
+        return event.deltaY;
+      case WheelEvent.DOM_DELTA_PAGE:
+        return event.deltaY * Math.max(1, Math.floor(view2.scrollDOM.clientHeight / lineHeight));
+      default:
+        return event.deltaY / lineHeight;
+    }
+  }
+  function scrollRawViewByLines(view2, lineDelta) {
+    if (!lineDelta) {
+      return false;
+    }
+    const lineHeight = Math.max(1, view2.defaultLineHeight || 1);
+    const scroller = view2.scrollDOM;
+    const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    const nextScrollTop = clamp(
+      scroller.scrollTop + lineDelta * lineHeight,
+      0,
+      maxScrollTop
+    );
+    if (nextScrollTop === scroller.scrollTop) {
+      return false;
+    }
+    scroller.scrollTop = nextScrollTop;
+    return true;
   }
   function addReplacement(decorations2, atomicRanges2, from, to, spec = {}) {
     if (from >= to) {
@@ -24390,7 +24920,7 @@
       contentEnd -= match[4].length;
       addReplacement(decorations2, atomicRanges2, contentEnd, line.to);
     }
-    addMark(decorations2, prefixEnd, contentEnd, `cm-heading-${level}`);
+    addLineClass(decorations2, line.from, `cm-heading-${level}`);
   }
   function decorateStrongEmphasis(decorations2, atomicRanges2, node, state) {
     const text = state.sliceDoc(node.from, node.to);
@@ -24461,43 +24991,133 @@
       return;
     }
     const linkText = match[1];
-    const url = match[2];
+    const url = normalizeLinkTarget(match[2]);
     const contentStart = node.from + 1;
     const contentEnd = contentStart + linkText.length;
     addReplacement(decorations2, atomicRanges2, node.from, contentStart);
-    addMark(decorations2, contentStart, contentEnd, "cm-link", { title: url });
+    addMark(decorations2, contentStart, contentEnd, "cm-link", {
+      title: url,
+      "data-link-target": url
+    });
     addReplacement(decorations2, atomicRanges2, contentEnd, node.to);
   }
-  function decorateListItem(decorations2, atomicRanges2, node, state) {
+  function decorateUrl(decorations2, node, state) {
+    if (hasAncestorNamed(node, "Link")) {
+      return;
+    }
+    const text = state.sliceDoc(node.from, node.to);
+    addMark(decorations2, node.from, node.to, "cm-link", {
+      title: normalizeLinkTarget(text),
+      "data-link-target": normalizeLinkTarget(text)
+    });
+  }
+  function decorateBareDomains(decorations2, state, tree) {
+    for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
+      const line = state.doc.line(lineNumber);
+      bareDomainPattern.lastIndex = 0;
+      for (const match of line.text.matchAll(bareDomainPattern)) {
+        const matchedText = trimDetectedDomain(match[0]);
+        if (!matchedText) {
+          continue;
+        }
+        const matchStart = line.from + match.index;
+        const matchEnd = matchStart + matchedText.length;
+        if (!isBareDomainRenderable(tree, matchStart, matchEnd, line.text, match.index, matchedText.length)) {
+          continue;
+        }
+        addMark(decorations2, matchStart, matchEnd, "cm-link", {
+          title: normalizeLinkTarget(matchedText),
+          "data-link-target": normalizeLinkTarget(matchedText)
+        });
+      }
+    }
+  }
+  function normalizeLinkTarget(text) {
+    if (/^[a-z][a-z0-9+.-]*:/i.test(text)) {
+      return text;
+    }
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(text)) {
+      return `mailto:${text}`;
+    }
+    return `https://${text}`;
+  }
+  function trimDetectedDomain(text) {
+    return text.replace(/[),.;:!?]+$/g, "");
+  }
+  function isBareDomainRenderable(tree, from, to, lineText, matchIndex) {
+    if (matchIndex > 0) {
+      const before = lineText[matchIndex - 1];
+      if (before === "@" || before === "/" || before === ":") {
+        return false;
+      }
+    }
+    for (let position = from; position < to; position += 1) {
+      if (hasBlockedLineWidgetContext(tree, position) || hasLinkishContext(tree, position)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  function hasLinkishContext(tree, position) {
+    for (let node = tree.resolveInner(position, 1); node; node = node.parent) {
+      if (node.name === "Link" || node.name === "URL" || node.name === "Autolink") {
+        return true;
+      }
+    }
+    return false;
+  }
+  function hasAncestorNamed(node, name2) {
+    for (let current = node.node.parent; current; current = current.parent) {
+      if (current.name === name2) {
+        return true;
+      }
+    }
+    return false;
+  }
+  function decorateListItem(decorations2, atomicRanges2, node, state, standardTaskLines, renderedListLines) {
+    const listItem = node.node;
+    const listMark = listItem.getChild("ListMark");
+    if (!listMark) {
+      return;
+    }
     const line = state.doc.lineAt(node.from);
-    const text = line.text;
-    const taskMatch = /^(\s*)([-+*]|\d+[.)])(\s+)(\[(?: |x|X)\])(\s+)/.exec(text);
-    if (taskMatch) {
-      const markerFrom2 = line.from + taskMatch[1].length;
-      const markerTo2 = markerFrom2 + taskMatch[2].length + taskMatch[3].length;
-      const checkboxFrom = markerTo2;
-      const checkboxTo = checkboxFrom + taskMatch[4].length;
-      const checked = /x/i.test(taskMatch[4]);
-      const markerText = taskMatch[2];
+    renderedListLines.add(line.from);
+    const taskMarker = listItem.getChild("Task")?.getChild("TaskMarker");
+    if (taskMarker) {
+      standardTaskLines.add(line.from);
+      const checked = /x/i.test(state.sliceDoc(taskMarker.from, taskMarker.to));
       addReplacement(
         decorations2,
         atomicRanges2,
-        markerFrom2,
-        markerTo2,
-        { widget: new ListMarkerWidget(markerText), inclusive: false }
+        listMark.from,
+        taskMarker.from,
+        { inclusive: false }
       );
       addReplacement(
         decorations2,
         atomicRanges2,
-        checkboxFrom,
-        checkboxTo,
+        taskMarker.from,
+        taskMarker.to,
         {
-          widget: new CheckboxWidget(checked, checkboxFrom),
+          widget: new CheckboxWidget({
+            checked,
+            from: taskMarker.from,
+            to: taskMarker.to,
+            checkedText: "[x]",
+            uncheckedText: "[ ]"
+          }),
           inclusive: false
         }
       );
+      addMark(
+        decorations2,
+        taskMarker.to,
+        line.to,
+        checked ? "cm-task-text cm-task-complete-text" : "cm-task-text"
+      );
       return;
     }
+    const text = line.text;
     const listMatch = /^(\s*)([-+*]|\d+[.)])(\s+)/.exec(text);
     if (!listMatch) {
       return;
@@ -24511,6 +25131,79 @@
       markerTo,
       { widget: new ListMarkerWidget(listMatch[2]), inclusive: false }
     );
+  }
+  function decorateBareTaskLines(decorations2, atomicRanges2, state, tree, standardTaskLines) {
+    for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
+      const line = state.doc.line(lineNumber);
+      if (standardTaskLines.has(line.from)) {
+        continue;
+      }
+      const match = customTaskPattern.exec(line.text);
+      if (!match) {
+        continue;
+      }
+      const checkboxFrom = line.from + match[1].length;
+      const checked = /x/i.test(match[2]);
+      if (!isBareTaskRenderableLine(tree, checkboxFrom)) {
+        continue;
+      }
+      addReplacement(
+        decorations2,
+        atomicRanges2,
+        checkboxFrom,
+        checkboxFrom + match[2].length,
+        {
+          widget: new CheckboxWidget({
+            checked,
+            from: checkboxFrom,
+            to: checkboxFrom + match[2].length,
+            checkedText: "[x]",
+            uncheckedText: "[]"
+          }),
+          inclusive: false
+        }
+      );
+      addMark(
+        decorations2,
+        checkboxFrom + match[2].length,
+        line.to,
+        checked ? "cm-task-text cm-task-complete-text" : "cm-task-text"
+      );
+    }
+  }
+  function decoratePendingListLines(decorations2, atomicRanges2, state, tree, renderedListLines) {
+    for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
+      const line = state.doc.line(lineNumber);
+      if (renderedListLines.has(line.from)) {
+        continue;
+      }
+      const match = /^(\s*)([-+*]|\d+[.)])(\s*)$/.exec(line.text);
+      if (!match) {
+        continue;
+      }
+      const markerFrom = line.from + match[1].length;
+      if (hasBlockedLineWidgetContext(tree, markerFrom)) {
+        continue;
+      }
+      addReplacement(
+        decorations2,
+        atomicRanges2,
+        markerFrom,
+        line.to,
+        { widget: new ListMarkerWidget(match[2]), inclusive: false }
+      );
+    }
+  }
+  function isBareTaskRenderableLine(tree, position) {
+    return !hasBlockedLineWidgetContext(tree, position);
+  }
+  function hasBlockedLineWidgetContext(tree, position) {
+    for (let node = tree.resolveInner(position, 1); node; node = node.parent) {
+      if (blockedLineWidgetContexts.has(node.name)) {
+        return true;
+      }
+    }
+    return false;
   }
   function decorateBlockquote(decorations2, atomicRanges2, node, state) {
     const startLine = state.doc.lineAt(node.from).number;
@@ -24551,14 +25244,18 @@
       addLineClass(decorations2, line.from, "cm-code-block-line");
     }
   }
-  function decorateHorizontalRule(decorations2, atomicRanges2, node) {
+  function decorateHorizontalRule(decorations2, atomicRanges2, node, state) {
+    const active = isCursorOnSyntaxNode(state, node);
+    if (active) {
+      addLineClass(decorations2, node.from, "cm-horizontal-rule-active-line");
+    }
     addReplacement(
       decorations2,
       atomicRanges2,
       node.from,
       node.to,
       {
-        widget: new HorizontalRuleWidget(),
+        widget: new HorizontalRuleWidget(active),
         block: true
       }
     );
@@ -24567,25 +25264,36 @@
     constructor(marker) {
       super();
       this.marker = marker;
+      this.ordered = /^\d/.test(marker);
     }
     eq(other) {
       return other.marker === this.marker;
     }
     toDOM() {
       const element = document.createElement("span");
-      element.className = "cm-list-marker";
-      element.textContent = /^\d/.test(this.marker) ? this.marker : "\u2022";
+      element.className = this.ordered ? "cm-list-marker cm-list-marker-ordered" : "cm-list-marker cm-list-marker-bullet";
+      if (this.ordered) {
+        element.textContent = this.marker;
+        element.style.color = "var(--link-color)";
+      } else {
+        const dot2 = document.createElement("span");
+        dot2.className = "cm-list-marker-bullet-dot";
+        element.appendChild(dot2);
+      }
       return element;
     }
   };
   var CheckboxWidget = class extends WidgetType {
-    constructor(checked, position) {
+    constructor({ checked, from, to, checkedText, uncheckedText }) {
       super();
       this.checked = checked;
-      this.position = position;
+      this.from = from;
+      this.to = to;
+      this.checkedText = checkedText;
+      this.uncheckedText = uncheckedText;
     }
     eq(other) {
-      return other.checked === this.checked && other.position === this.position;
+      return other.checked === this.checked && other.from === this.from && other.to === this.to && other.checkedText === this.checkedText && other.uncheckedText === this.uncheckedText;
     }
     ignoreEvent() {
       return false;
@@ -24602,11 +25310,11 @@
       input.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        const replacement = this.checked ? "[ ]" : "[x]";
+        const replacement = this.checked ? this.uncheckedText : this.checkedText;
         view2.dispatch({
           changes: {
-            from: this.position,
-            to: this.position + 3,
+            from: this.from,
+            to: this.to,
             insert: replacement
           }
         });
@@ -24616,15 +25324,100 @@
     }
   };
   var HorizontalRuleWidget = class extends WidgetType {
-    eq() {
-      return true;
+    constructor(active = false) {
+      super();
+      this.active = active;
+    }
+    eq(other) {
+      return other.active === this.active;
     }
     toDOM() {
       const hr = document.createElement("hr");
-      hr.className = "cm-horizontal-rule";
+      hr.className = this.active ? "cm-horizontal-rule cm-horizontal-rule-active" : "cm-horizontal-rule";
       return hr;
     }
   };
+  function isCursorOnSyntaxNode(state, node) {
+    const selection = state.selection.main;
+    return selection.empty && selection.from >= node.from && selection.from <= node.to;
+  }
+  function isCursorOnHorizontalRule(state) {
+    const selection = state.selection.main;
+    if (!selection.empty) {
+      return false;
+    }
+    return !!findDirectHorizontalRuleNodeAt(state, selection.from);
+  }
+  function getDeleteRangeForLine(state, line) {
+    let from = line.from;
+    let to = line.to;
+    if (line.to < state.doc.length) {
+      to += 1;
+    } else if (line.from > 0) {
+      from -= 1;
+    }
+    return { from, to };
+  }
+  function findDirectHorizontalRuleNodeAt(state, position) {
+    const tree = syntaxTree(state);
+    const candidate = Math.max(0, Math.min(state.doc.length, position));
+    for (const side of [-1, 1]) {
+      for (let node = tree.resolveInner(candidate, side); node; node = node.parent) {
+        if (node.name === "HorizontalRule") {
+          return node;
+        }
+      }
+    }
+    return null;
+  }
+  function collectHorizontalRuleDeleteRanges(state, selection, preferNearby = false) {
+    const ranges = [];
+    const seenLines = /* @__PURE__ */ new Set();
+    const addLine = (line) => {
+      if (!horizontalRulePattern.test(line.text) || seenLines.has(line.number)) {
+        return;
+      }
+      seenLines.add(line.number);
+      ranges.push(getDeleteRangeForLine(state, line));
+    };
+    const addNodeAt = (position) => {
+      const node = findDirectHorizontalRuleNodeAt(state, position);
+      if (node) {
+        addLine(state.doc.lineAt(node.from));
+      }
+    };
+    addNodeAt(selection.from);
+    if (!selection.empty) {
+      addNodeAt(selection.to);
+      addNodeAt(Math.max(0, selection.from - 1));
+      addNodeAt(Math.max(0, selection.to - 1));
+    }
+    const startLine = state.doc.lineAt(selection.from).number;
+    const endPosition = selection.empty ? selection.to : Math.max(selection.from, selection.to - 1);
+    const endLine = state.doc.lineAt(endPosition).number;
+    for (let lineNumber = startLine; lineNumber <= endLine; lineNumber += 1) {
+      addLine(state.doc.line(lineNumber));
+    }
+    if (preferNearby && !ranges.length) {
+      const currentLine = state.doc.lineAt(selection.from).number;
+      for (const lineNumber of [currentLine - 1, currentLine, currentLine + 1]) {
+        if (lineNumber >= 1 && lineNumber <= state.doc.lines) {
+          addLine(state.doc.line(lineNumber));
+        }
+      }
+    }
+    return ranges;
+  }
+  function findHorizontalRuleDeleteRange(state, selection, preferNearby = false) {
+    const ranges = collectHorizontalRuleDeleteRanges(state, selection, preferNearby);
+    if (!ranges.length) {
+      return null;
+    }
+    return {
+      from: Math.min(selection.from, ...ranges.map((range) => range.from)),
+      to: Math.max(selection.to, ...ranges.map((range) => range.to))
+    };
+  }
   function toggleMarkdownWrap(delimiter) {
     return (view2) => {
       const selection = view2.state.selection.main;
@@ -24680,6 +25473,107 @@
     });
     return true;
   }
+  function backspaceHorizontalRule(view2) {
+    if (currentMode !== "rendered") {
+      return false;
+    }
+    const selection = view2.state.selection.main;
+    const deleteRange = findHorizontalRuleDeleteRange(
+      view2.state,
+      selection,
+      view2.dom.classList.contains("cm-on-horizontal-rule")
+    );
+    if (!deleteRange) {
+      return false;
+    }
+    view2.dispatch({
+      changes: { from: deleteRange.from, to: deleteRange.to, insert: "" },
+      selection: EditorSelection.cursor(deleteRange.from)
+    });
+    return true;
+  }
+  function backspaceTaskMarker(view2) {
+    if (currentMode !== "rendered") {
+      return false;
+    }
+    const selection = view2.state.selection.main;
+    if (!selection.empty) {
+      return false;
+    }
+    const line = view2.state.doc.lineAt(selection.from);
+    const standardTaskMatch = /^(\s*)([-+*]|\d+[.)])(\s+)(\[(?: |x|X)\])(\s+)/.exec(line.text);
+    if (standardTaskMatch) {
+      const deleteFrom = line.from + standardTaskMatch[1].length + standardTaskMatch[2].length + standardTaskMatch[3].length;
+      const deleteTo = deleteFrom + standardTaskMatch[4].length + standardTaskMatch[5].length;
+      if (selection.from > deleteFrom && selection.from <= deleteTo) {
+        view2.dispatch({
+          changes: { from: deleteFrom, to: deleteTo, insert: "" },
+          selection: EditorSelection.cursor(deleteFrom)
+        });
+        return true;
+      }
+    }
+    const customTaskMatch = /^(\s*)(\[\]|\[(?:x|X)\])(\s+)/.exec(line.text);
+    if (customTaskMatch) {
+      const deleteFrom = line.from + customTaskMatch[1].length;
+      const deleteTo = deleteFrom + customTaskMatch[2].length + customTaskMatch[3].length;
+      if (selection.from > deleteFrom && selection.from <= deleteTo) {
+        view2.dispatch({
+          changes: { from: deleteFrom, to: deleteTo, insert: "" },
+          selection: EditorSelection.cursor(deleteFrom)
+        });
+        return true;
+      }
+    }
+    return false;
+  }
+  function backspaceRenderedMarkup(view2) {
+    return backspaceHorizontalRule(view2) || backspaceHeadingMarker(view2) || backspaceTaskMarker(view2);
+  }
+  function continueTaskOrListMarkup(view2) {
+    if (insertNewlineContinueMarkup(view2)) {
+      trimPendingListContinuation(view2);
+      return true;
+    }
+    const selection = view2.state.selection.main;
+    if (!selection.empty) {
+      return false;
+    }
+    const line = view2.state.doc.lineAt(selection.from);
+    if (selection.from !== line.to) {
+      return false;
+    }
+    const match = /^(\s*)(\[\]|\[(?:x|X)\])(\s+)/.exec(line.text);
+    if (!match) {
+      return false;
+    }
+    const indent = match[1];
+    const insert2 = `
+${indent}[] `;
+    view2.dispatch({
+      changes: { from: selection.from, insert: insert2 },
+      selection: EditorSelection.cursor(selection.from + insert2.length)
+    });
+    return true;
+  }
+  function trimPendingListContinuation(view2) {
+    if (currentMode !== "rendered") {
+      return false;
+    }
+    const selection = view2.state.selection.main;
+    if (!selection.empty) {
+      return false;
+    }
+    const line = view2.state.doc.lineAt(selection.from);
+    if (!/^(\s*)([-+*]|\d+[.)]) $/.test(line.text)) {
+      return false;
+    }
+    view2.dispatch({
+      changes: { from: line.to - 1, to: line.to, insert: "" },
+      selection: EditorSelection.cursor(line.to - 1)
+    });
+    return true;
+  }
   function selectedLines(state) {
     const startLine = state.doc.lineAt(state.selection.main.from).number;
     const endLine = state.doc.lineAt(state.selection.main.to).number;
@@ -24722,12 +25616,133 @@
     view2.dispatch({ changes });
     return true;
   }
+  function maybeAutoAdvanceHorizontalRule(update) {
+    if (currentMode !== "rendered" || !update.docChanged) {
+      return false;
+    }
+    if (update.transactions.some((transaction) => transaction.annotation(fromSwiftAnnotation) || transaction.annotation(autoAdvanceHorizontalRuleAnnotation))) {
+      return false;
+    }
+    if (!update.transactions.some((transaction) => transaction.isUserEvent("input.type"))) {
+      return false;
+    }
+    const selection = update.state.selection.main;
+    if (!selection.empty) {
+      return false;
+    }
+    const line = update.state.doc.lineAt(selection.from);
+    if (!horizontalRulePattern.test(line.text) || selection.from !== line.to) {
+      return false;
+    }
+    if (line.number < update.state.doc.lines) {
+      const nextLine = update.state.doc.line(line.number + 1);
+      if (nextLine.text.length === 0) {
+        update.view.dispatch({
+          selection: EditorSelection.cursor(nextLine.from),
+          annotations: autoAdvanceHorizontalRuleAnnotation.of(true)
+        });
+        return false;
+      }
+      return false;
+    }
+    update.view.dispatch({
+      changes: { from: line.to, insert: "\n" },
+      selection: EditorSelection.cursor(line.to + 1),
+      annotations: autoAdvanceHorizontalRuleAnnotation.of(true)
+    });
+    return true;
+  }
   var renderedDecorations = buildRenderedArtifactsField();
+  var rawLineNumbers = lineNumbers();
+  var rawActiveLineHighlights = [
+    highlightActiveLine(),
+    highlightActiveLineGutter()
+  ];
+  var rawTerminalScroll = ViewPlugin.fromClass(
+    class {
+      constructor() {
+        this.pendingWheelLines = 0;
+      }
+    },
+    {
+      eventHandlers: {
+        wheel(event, view2) {
+          if (currentMode !== "raw" || event.ctrlKey || !event.deltaY) {
+            return false;
+          }
+          if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+            return false;
+          }
+          const lineUnits = getWheelLineUnits(event, view2);
+          if (!lineUnits) {
+            return false;
+          }
+          this.pendingWheelLines += lineUnits;
+          const wholeLines = this.pendingWheelLines > 0 ? Math.floor(this.pendingWheelLines) : Math.ceil(this.pendingWheelLines);
+          event.preventDefault();
+          if (!wholeLines) {
+            return true;
+          }
+          this.pendingWheelLines -= wholeLines;
+          if (!scrollRawViewByLines(view2, wholeLines)) {
+            this.pendingWheelLines = 0;
+          }
+          return true;
+        }
+      }
+    }
+  );
+  var renderedLinkClicks = ViewPlugin.fromClass(
+    class {
+    },
+    {
+      eventHandlers: {
+        click(event) {
+          if (currentMode !== "rendered") {
+            return false;
+          }
+          const clickedNode = event.target instanceof Node ? event.target : null;
+          const target = clickedNode instanceof Element ? clickedNode.closest(".cm-link") : clickedNode?.parentElement?.closest(".cm-link");
+          const url = target?.getAttribute("data-link-target");
+          if (!url) {
+            return false;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          safePostMessage("openLink", { url });
+          return true;
+        }
+      }
+    }
+  );
+  var renderedCursorState = ViewPlugin.fromClass(
+    class {
+      constructor(view2) {
+        this.view = view2;
+        this.sync();
+      }
+      update() {
+        this.sync();
+      }
+      destroy() {
+        this.view.dom.classList.remove("cm-on-horizontal-rule");
+      }
+      sync() {
+        this.view.dom.classList.toggle(
+          "cm-on-horizontal-rule",
+          currentMode === "rendered" && isCursorOnHorizontalRule(this.view.state)
+        );
+      }
+    }
+  );
   var modeClassExtension = EditorView.editorAttributes.of({
     class: "cm-specter-rendered"
   });
   var rawModeClassExtension = EditorView.editorAttributes.of({
     class: "cm-specter-raw"
+  });
+  var readerWidthClassExtension = EditorView.editorAttributes.of({
+    class: "cm-specter-reader-width"
   });
   var baseTheme3 = EditorView.theme({
     "&": {
@@ -24739,7 +25754,7 @@
       fontFamily: "inherit"
     },
     ".cm-content": {
-      caretColor: "var(--text-primary)",
+      caretColor: "var(--caret-color)",
       padding: "0"
     },
     ".cm-line": {
@@ -24751,13 +25766,28 @@
     ".cm-selectionBackground": {
       backgroundColor: "var(--selection-bg) !important"
     },
-    ".cm-cursor": {
-      borderLeftColor: "var(--text-primary)"
+    ".cm-cursor, .cm-dropCursor": {
+      borderLeftColor: "var(--caret-color)"
     }
   });
   var renderedTheme = EditorView.theme({
     "&": {
       padding: "0"
+    },
+    ".cm-content": {
+      caretColor: "var(--caret-color)"
+    },
+    ".cm-cursor": {
+      backgroundColor: "var(--caret-color)",
+      borderLeft: "none",
+      width: "2px",
+      marginLeft: "-1px",
+      borderRadius: "999px"
+    },
+    ".cm-dropCursor": {
+      borderLeft: "2px solid var(--caret-color)",
+      marginLeft: "-1px",
+      borderRadius: "999px"
     }
   });
   var rawTheme = EditorView.theme({
@@ -24767,8 +25797,8 @@
   });
   var editorCommands = Prec.high(
     keymap.of([
-      { key: "Enter", run: insertNewlineContinueMarkup },
-      { key: "Backspace", run: backspaceHeadingMarker },
+      { key: "Enter", run: continueTaskOrListMarkup },
+      { key: "Backspace", run: backspaceRenderedMarkup },
       { key: "Tab", run: indentListSelection, shift: indentMore },
       { key: "Shift-Tab", run: outdentListSelection, shift: indentLess },
       { key: "Mod-b", run: toggleMarkdownWrap("**") },
@@ -24778,6 +25808,9 @@
   );
   var updateListener2 = EditorView.updateListener.of((update) => {
     if (!update.docChanged) {
+      return;
+    }
+    if (maybeAutoAdvanceHorizontalRule(update)) {
       return;
     }
     if (update.transactions.some((transaction) => transaction.annotation(fromSwiftAnnotation))) {
@@ -24793,7 +25826,7 @@
     state: EditorState.create({
       doc: "",
       extensions: [
-        markdown(),
+        markdown({ extensions: [TaskList, Autolink, { remove: ["SetextHeading"] }] }),
         history(),
         drawSelection(),
         EditorView.lineWrapping,
@@ -24803,6 +25836,12 @@
         decorationCompartment.of(renderedDecorations),
         themeCompartment.of(renderedTheme),
         modeClassCompartment.of(modeClassExtension),
+        layoutClassCompartment.of([]),
+        gutterCompartment.of([]),
+        activeLineCompartment.of([]),
+        scrollBehaviorCompartment.of([]),
+        renderedCursorState,
+        renderedLinkClicks,
         updateListener2
       ]
     }),
@@ -24820,6 +25859,15 @@
         ),
         modeClassCompartment.reconfigure(
           currentMode === "rendered" ? modeClassExtension : rawModeClassExtension
+        ),
+        gutterCompartment.reconfigure(
+          currentMode === "rendered" ? [] : rawLineNumbers
+        ),
+        activeLineCompartment.reconfigure(
+          currentMode === "rendered" ? [] : rawActiveLineHighlights
+        ),
+        scrollBehaviorCompartment.reconfigure(
+          currentMode === "rendered" ? [] : rawTerminalScroll
         )
       ]
     });
@@ -24850,6 +25898,20 @@
       dark.disabled = theme2 !== "dark";
     }
   }
+  function setTextScale(scale) {
+    const numericScale = Number(scale);
+    const nextScale = Number.isFinite(numericScale) ? numericScale : 1;
+    const clampedScale = Math.min(maximumTextScale, Math.max(minimumTextScale, nextScale));
+    view.dom.style.setProperty("--specter-text-scale", String(clampedScale));
+    view.requestMeasure();
+  }
+  function setReaderWidth(enabled) {
+    view.dispatch({
+      effects: layoutClassCompartment.reconfigure(
+        enabled ? readerWidthClassExtension : []
+      )
+    });
+  }
   globalThis.editor = {
     setText,
     getText() {
@@ -24857,6 +25919,8 @@
     },
     setMode,
     setTheme,
+    setTextScale,
+    setReaderWidth,
     focus() {
       view.focus();
     }

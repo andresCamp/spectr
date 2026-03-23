@@ -22,7 +22,7 @@ import {
   markdown,
 } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
-import { Autolink, TaskList } from "@lezer/markdown";
+import { Autolink, Table, TaskList } from "@lezer/markdown";
 import {
   defaultKeymap,
   history,
@@ -56,9 +56,246 @@ const blockedLineWidgetContexts = new Set([
   "InlineCode",
   "ProcessingInstruction",
   "ProcessingInstructionBlock",
+  "Table",
+  "TableHeader",
+  "TableRow",
+  "TableDelimiter",
 ]);
 const minimumTextScale = 11 / 15;
 const maximumTextScale = 2;
+
+// --- Content fingerprint visualization ---
+
+function fnv1aHash(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+function mulberry32(seed) {
+  return function () {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function parseHexColor(hex) {
+  hex = hex.trim().replace("#", "");
+  return {
+    r: parseInt(hex.substring(0, 2), 16),
+    g: parseInt(hex.substring(2, 4), 16),
+    b: parseInt(hex.substring(4, 6), 16),
+  };
+}
+
+let activeFingerprintAnimation = null;
+
+function drawContentFingerprint(canvas, text, animate) {
+  // Cancel any running animation
+  if (activeFingerprintAnimation) {
+    cancelAnimationFrame(activeFingerprintAnimation);
+    activeFingerprintAnimation = null;
+  }
+
+  const hash = fnv1aHash(text);
+  const rng = mulberry32(hash);
+
+  const dpr = globalThis.devicePixelRatio || 1;
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  if (w === 0 || h === 0) return;
+
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+
+  const ctx = canvas.getContext("2d");
+  ctx.scale(dpr, dpr);
+
+  const trimHex = getComputedStyle(document.documentElement)
+    .getPropertyValue("--trim-color")
+    .trim();
+  const { r, g, b } = parseHexColor(trimHex || "#e3bd96");
+  const isDark = document.documentElement.dataset.theme === "dark";
+
+  // Precompute tile data
+  const tileSize = 10;
+  const gap = 2;
+  const step = tileSize + gap;
+  const cols = Math.ceil(w / step);
+  const rows = Math.ceil(h / step);
+  const maxDiag = cols + rows - 2;
+  const tiles = [];
+
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const v = rng();
+      if (v < 0.35) {
+        rng(); // consume to keep sequence stable
+        continue;
+      }
+
+      let fillStyle;
+      if (v < 0.65) {
+        const opacity = isDark
+          ? 0.15 + rng() * 0.35
+          : 0.12 + rng() * 0.30;
+        fillStyle = `rgba(${r}, ${g}, ${b}, ${opacity})`;
+      } else {
+        const opacity = isDark
+          ? 0.06 + rng() * 0.12
+          : 0.04 + rng() * 0.10;
+        fillStyle = isDark
+          ? `rgba(255, 255, 255, ${opacity})`
+          : `rgba(0, 0, 0, ${opacity})`;
+      }
+
+      tiles.push({
+        x: col * step,
+        y: row * step,
+        diag: col + row,
+        fillStyle,
+      });
+    }
+  }
+
+  const fadeH = 24;
+
+  function renderFrame(progress) {
+    ctx.clearRect(0, 0, w, h);
+
+    for (const tile of tiles) {
+      // Each tile's local progress based on its diagonal position
+      const tileDelay = tile.diag / maxDiag;
+      const tileProgress = Math.max(0, Math.min(1, (progress - tileDelay * 0.6) / 0.4));
+      if (tileProgress <= 0) continue;
+
+      ctx.globalAlpha = tileProgress;
+      ctx.fillStyle = tile.fillStyle;
+      ctx.fillRect(tile.x, tile.y, tileSize, tileSize);
+    }
+
+    ctx.globalAlpha = 1;
+
+    // Fade bottom edge
+    const fadeGrad = ctx.createLinearGradient(0, h - fadeH, 0, h);
+    fadeGrad.addColorStop(0, "rgba(0,0,0,0)");
+    fadeGrad.addColorStop(1, "rgba(0,0,0,1)");
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.fillStyle = fadeGrad;
+    ctx.fillRect(0, h - fadeH, w, fadeH);
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  if (!animate) {
+    renderFrame(1);
+    return;
+  }
+
+  const duration = 600;
+  const start = performance.now();
+
+  function tick(now) {
+    const elapsed = now - start;
+    const t = Math.min(1, elapsed / duration);
+    // Ease out cubic
+    const progress = 1 - Math.pow(1 - t, 3);
+    renderFrame(progress);
+    if (t < 1) {
+      activeFingerprintAnimation = requestAnimationFrame(tick);
+    } else {
+      activeFingerprintAnimation = null;
+    }
+  }
+
+  activeFingerprintAnimation = requestAnimationFrame(tick);
+}
+
+let documentHeaderInstance = null;
+
+const contentFingerprintPlugin = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.header = document.createElement("div");
+      this.header.className = "cm-document-header";
+
+      this.canvas = document.createElement("canvas");
+      this.canvas.className = "cm-content-fingerprint";
+      this.header.appendChild(this.canvas);
+
+      this.meta = document.createElement("div");
+      this.meta.className = "cm-document-meta";
+      this.header.appendChild(this.meta);
+
+      this.dateEl = document.createElement("span");
+      this.dateEl.className = "cm-document-meta-item";
+      this.dateLabelEl = document.createElement("span");
+      this.dateLabelEl.className = "cm-document-meta-label";
+      this.dateLabelEl.textContent = "Last edited";
+      this.dateEl.appendChild(this.dateLabelEl);
+      this.dateValueEl = document.createElement("span");
+      this.dateEl.appendChild(this.dateValueEl);
+      this.meta.appendChild(this.dateEl);
+
+      this.pathEl = document.createElement("span");
+      this.pathEl.className = "cm-document-meta-item";
+      this.pathLabelEl = document.createElement("span");
+      this.pathLabelEl.className = "cm-document-meta-label";
+      this.pathLabelEl.textContent = "Path";
+      this.pathEl.appendChild(this.pathLabelEl);
+      this.pathValueEl = document.createElement("span");
+      this.pathEl.appendChild(this.pathValueEl);
+      this.meta.appendChild(this.pathEl);
+
+      this.debounceTimer = null;
+      this.hasDrawn = false;
+
+      view.scrollDOM.insertBefore(this.header, view.scrollDOM.firstChild);
+
+      this.resizeObserver = new ResizeObserver(() => {
+        const animate = !this.hasDrawn;
+        this.hasDrawn = true;
+        this.draw(view.state.doc.toString(), animate);
+      });
+      this.resizeObserver.observe(this.canvas);
+
+      documentHeaderInstance = this;
+    }
+
+    update(update) {
+      if (update.docChanged) {
+        clearTimeout(this.debounceTimer);
+        const text = update.state.doc.toString();
+        this.debounceTimer = setTimeout(() => this.draw(text, false), 800);
+      }
+    }
+
+    draw(text, animate) {
+      drawContentFingerprint(this.canvas, text, animate);
+    }
+
+    setFileInfo(path, lastModified) {
+      this.pathValueEl.textContent = path || "";
+      this.dateValueEl.textContent = lastModified || "";
+    }
+
+    destroy() {
+      clearTimeout(this.debounceTimer);
+      this.resizeObserver.disconnect();
+      this.header.remove();
+      if (documentHeaderInstance === this) {
+        documentHeaderInstance = null;
+      }
+    }
+  },
+);
+
+// --- End content fingerprint ---
 
 function safePostMessage(name, body) {
   const handler = globalThis.webkit?.messageHandlers?.[name];
@@ -172,6 +409,9 @@ function buildRenderArtifacts(state) {
           break;
         case "HorizontalRule":
           decorateHorizontalRule(decorations, atomicRanges, node, state);
+          break;
+        case "Table":
+          decorateTable(decorations, atomicRanges, node, state);
           break;
         default:
           break;
@@ -671,6 +911,170 @@ function decorateFencedCode(decorations, atomicRanges, node, state) {
   for (let lineNumber = firstLine.number + 1; lineNumber < lastLine.number; lineNumber += 1) {
     const line = state.doc.line(lineNumber);
     addLineClass(decorations, line.from, "cm-code-block-line");
+  }
+}
+
+function decorateTable(decorations, atomicRanges, node, state) {
+  // Collect column alignments and delimiter row position from tree children.
+  const alignments = [];
+  let delimiterRowFrom = -1;
+  let delimiterRowTo = -1;
+  let columnCount = 0;
+  const rows = []; // { from, to, lineNumber, isHeader, cells: [{ from, to }] }
+
+  // First pass: walk direct children to gather structure.
+  let child = node.node.firstChild;
+  while (child) {
+    if (child.name === "TableDelimiter" && child.from !== child.parent?.firstChild?.from) {
+      // This is the separator row (not an inline pipe delimiter).
+      // It spans an entire line when it's a direct child of Table.
+      const line = state.doc.lineAt(child.from);
+      if (line.from === child.from || line.text.trim().startsWith("|")) {
+        delimiterRowFrom = line.from;
+        delimiterRowTo = line.to;
+        // Parse alignment from separator content.
+        const sepText = state.doc.sliceString(child.from, child.to);
+        const sepCells = sepText.split("|").filter(s => s.trim().length > 0);
+        for (const cell of sepCells) {
+          const trimmed = cell.trim();
+          const left = trimmed.startsWith(":");
+          const right = trimmed.endsWith(":");
+          if (left && right) {
+            alignments.push("center");
+          } else if (right) {
+            alignments.push("right");
+          } else {
+            alignments.push("left");
+          }
+        }
+      }
+    } else if (child.name === "TableHeader" || child.name === "TableRow") {
+      const cells = [];
+      let cellChild = child.firstChild;
+      while (cellChild) {
+        if (cellChild.name === "TableCell") {
+          cells.push({ from: cellChild.from, to: cellChild.to });
+        }
+        cellChild = cellChild.nextSibling;
+      }
+      const line = state.doc.lineAt(child.from);
+      rows.push({
+        from: child.from,
+        to: child.to,
+        lineFrom: line.from,
+        lineTo: line.to,
+        lineNumber: line.number,
+        isHeader: child.name === "TableHeader",
+        cells,
+      });
+      if (cells.length > columnCount) {
+        columnCount = cells.length;
+      }
+    }
+    child = child.nextSibling;
+  }
+
+  if (rows.length === 0) {
+    return;
+  }
+
+  const lastRowLineNumber = rows[rows.length - 1].lineNumber;
+
+  // Hide the delimiter/separator row.
+  if (delimiterRowFrom >= 0) {
+    addReplacement(
+      decorations,
+      atomicRanges,
+      delimiterRowFrom,
+      delimiterRowTo < state.doc.length ? delimiterRowTo + 1 : delimiterRowTo,
+    );
+  }
+
+  // Decorate each data/header row.
+  const gridStyle = `grid-template-columns: repeat(${columnCount}, minmax(0, 1fr))`;
+  for (const row of rows) {
+    const line = state.doc.line(row.lineNumber);
+    const isLastRow = row.lineNumber === lastRowLineNumber && !row.isHeader;
+    const classes = ["cm-table-line"];
+    classes.push(row.isHeader ? "cm-table-header" : "cm-table-row");
+    if (isLastRow) {
+      classes.push("cm-table-row-last");
+    }
+
+    // Single line decoration with class + grid style to avoid conflicts.
+    decorations.push(
+      Decoration.line({
+        class: classes.join(" "),
+        attributes: { style: gridStyle },
+      }).range(line.from),
+    );
+
+    const text = line.text;
+
+    // Hide leading pipe + whitespace.
+    const firstPipe = text.indexOf("|");
+    if (firstPipe >= 0 && text.substring(0, firstPipe).trim() === "") {
+      let end = firstPipe + 1;
+      while (end < text.length && text[end] === " ") {
+        end += 1;
+      }
+      addReplacement(decorations, atomicRanges, line.from, line.from + end);
+    }
+
+    // Hide trailing pipe + whitespace.
+    const lastPipe = text.lastIndexOf("|");
+    if (lastPipe >= 0 && lastPipe > firstPipe && text.substring(lastPipe + 1).trim() === "") {
+      let start = lastPipe;
+      while (start > 0 && text[start - 1] === " ") {
+        start -= 1;
+      }
+      // Guard against overlap with leading replacement.
+      const leadingEnd = firstPipe >= 0 && text.substring(0, firstPipe).trim() === ""
+        ? firstPipe + 1
+        : 0;
+      if (start < leadingEnd) {
+        start = leadingEnd;
+      }
+      addReplacement(decorations, atomicRanges, line.from + start, line.from + text.length);
+    }
+
+    // Replace interior pipes with cell separator widgets.
+    // Walk through cells — pipes sit between consecutive cells.
+    for (let c = 0; c < row.cells.length - 1; c += 1) {
+      const cellEnd = row.cells[c].to;
+      const nextCellStart = row.cells[c + 1].from;
+      // The pipe and surrounding whitespace lives between cellEnd and nextCellStart.
+      // Find the pipe character in that gap.
+      const gapText = state.doc.sliceString(cellEnd, nextCellStart);
+      const pipeOffset = gapText.indexOf("|");
+      if (pipeOffset >= 0) {
+        // Replace the entire gap (whitespace + pipe + whitespace) with a separator widget.
+        addReplacement(decorations, atomicRanges, cellEnd, nextCellStart, {
+          widget: new TableCellSeparatorWidget(),
+        });
+      }
+    }
+
+    // Mark each cell with alignment class.
+    for (let c = 0; c < row.cells.length; c += 1) {
+      const cell = row.cells[c];
+      const align = alignments[c] || "left";
+      if (cell.from < cell.to) {
+        addMark(decorations, cell.from, cell.to, `cm-table-cell cm-table-align-${align}`);
+      }
+    }
+  }
+}
+
+class TableCellSeparatorWidget extends WidgetType {
+  eq() {
+    return true;
+  }
+
+  toDOM() {
+    const element = document.createElement("span");
+    element.className = "cm-table-cell-sep";
+    return element;
   }
 }
 
@@ -1213,12 +1617,12 @@ const scrollLineIndicator = ViewPlugin.fromClass(
       const scrollFraction = scroller.scrollHeight > scroller.clientHeight
         ? scroller.scrollTop / (scroller.scrollHeight - scroller.clientHeight)
         : 0;
-      const trackPadding = 4;
-      const badgeHeight = 22;
-      const maxTop = scroller.clientHeight - badgeHeight - trackPadding;
-      const top = trackPadding + scrollFraction * maxTop;
+      const thumbHeight = scroller.clientHeight * (scroller.clientHeight / scroller.scrollHeight);
+      const trackUsable = scroller.clientHeight - thumbHeight;
+      const thumbCenter = thumbHeight / 2 + scrollFraction * trackUsable;
 
-      this.badge.style.top = `${top}px`;
+      this.badge.style.top = `${thumbCenter}px`;
+      this.badge.style.transform = "translateY(-50%)";
       this.badge.classList.add("cm-scroll-line-badge-visible");
 
       clearTimeout(this.hideTimer);
@@ -1231,6 +1635,30 @@ const scrollLineIndicator = ViewPlugin.fromClass(
       this.view.scrollDOM.removeEventListener("scroll", this.onScroll);
       clearTimeout(this.hideTimer);
       this.badge.remove();
+    }
+  },
+);
+
+const scrollOffsetReporter = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.lastReported = -1;
+      this.onScroll = () => {
+        const top = view.scrollDOM.scrollTop;
+        const scrolled = top > 2;
+        const flag = scrolled ? 1 : 0;
+        if (flag !== this.lastReported) {
+          this.lastReported = flag;
+          safePostMessage("scrollAtTop", !scrolled);
+        }
+      };
+      view.scrollDOM.addEventListener("scroll", this.onScroll, { passive: true });
+      // Report initial state
+      requestAnimationFrame(() => this.onScroll());
+    }
+
+    destroy() {
+      // cleanup handled by CM
     }
   },
 );
@@ -1282,7 +1710,7 @@ const rawTerminalScroll = ViewPlugin.fromClass(
 );
 
 const renderedLinkClicks = ViewPlugin.fromClass(
-  class {},
+  class { },
   {
     eventHandlers: {
       click(event) {
@@ -1435,7 +1863,7 @@ const view = new EditorView({
   state: EditorState.create({
     doc: "",
     extensions: [
-      markdown({ extensions: [TaskList, Autolink, { remove: ["SetextHeading"] }] }),
+      markdown({ extensions: [TaskList, Autolink, Table, { remove: ["SetextHeading"] }] }),
       history(),
       drawSelection(),
       EditorView.lineWrapping,
@@ -1449,6 +1877,8 @@ const view = new EditorView({
       gutterCompartment.of([]),
       activeLineCompartment.of([]),
       scrollBehaviorCompartment.of([]),
+      contentFingerprintPlugin,
+      scrollOffsetReporter,
       scrollLineIndicator,
       renderedCursorState,
       renderedLinkClicks,
@@ -1458,7 +1888,12 @@ const view = new EditorView({
   parent,
 });
 
+let hasSetModeOnce = false;
+
 function setMode(mode) {
+  const isInitial = !hasSetModeOnce;
+  hasSetModeOnce = true;
+
   const topLine = getTopLineNumber(view);
   currentMode = mode === "raw" ? "raw" : "rendered";
   view.dispatch({
@@ -1483,7 +1918,11 @@ function setMode(mode) {
       ),
     ],
   });
-  requestAnimationFrame(() => scrollToLineNumber(view, topLine));
+
+  if (!isInitial) {
+    // Restore scroll position only on mode transitions, not initial setup
+    requestAnimationFrame(() => scrollToLineNumber(view, topLine));
+  }
 }
 
 function setText(text) {
@@ -1501,6 +1940,10 @@ function setText(text) {
     changes: { from: 0, to: view.state.doc.length, insert: nextText },
     selection: EditorSelection.range(anchor, head),
   });
+}
+
+function scrollToTop() {
+  view.scrollDOM.scrollTop = 0;
 }
 
 function setTheme(theme) {
@@ -1531,6 +1974,12 @@ function setReaderWidth(enabled) {
   });
 }
 
+function setFileInfo(path, lastModified) {
+  if (documentHeaderInstance) {
+    documentHeaderInstance.setFileInfo(path, lastModified);
+  }
+}
+
 globalThis.editor = {
   setText,
   getText() {
@@ -1540,6 +1989,8 @@ globalThis.editor = {
   setTheme,
   setTextScale,
   setReaderWidth,
+  setFileInfo,
+  scrollToTop,
   focus() {
     view.focus();
   },

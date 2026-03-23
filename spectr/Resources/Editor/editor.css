@@ -48,10 +48,53 @@ body {
 .cm-hidden-syntax {
 }
 
+.cm-spectr-rendered .cm-scroller {
+  display: block !important;
+}
+
+.cm-document-header {
+  display: block;
+  width: 100%;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.cm-content-fingerprint {
+  display: block;
+  width: 100%;
+  height: 234px;
+}
+
+.cm-document-meta {
+  display: flex;
+  flex-direction: row;
+  gap: 20px;
+  padding: 8px 24px 0;
+  font-family: "SF Mono", SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 11px;
+  letter-spacing: 0.01em;
+  color: var(--trim-color);
+  opacity: 0.6;
+}
+
+.cm-document-meta-item {
+  display: flex;
+  gap: 6px;
+}
+
+.cm-document-meta-label {
+  opacity: 0.5;
+}
+
+
+.cm-spectr-raw .cm-document-header {
+  display: none;
+}
+
 .cm-editor.cm-spectr-rendered .cm-content {
   max-width: none;
   margin: 0;
-  padding: 48px 16px 80px;
+  padding: 20px 16px 80px;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
   font-size: calc(var(--spectr-rendered-font-size) * var(--spectr-text-scale));
   line-height: 1.72;
@@ -272,7 +315,7 @@ body {
   border-right: 1px solid var(--code-border);
   font-family: "SF Mono", SFMono-Regular, Menlo, Monaco, monospace;
   font-size: 0.92em;
-  padding: 0 12px;
+  padding: 4px 14px;
 }
 
 .cm-horizontal-rule {
@@ -292,14 +335,66 @@ body {
   border-top-color: var(--trim-color);
 }
 
+.cm-table-line {
+  display: grid !important;
+  align-items: center;
+  padding: 0;
+  font-variant-numeric: tabular-nums;
+  border-bottom: 0.5px solid var(--divider-color);
+  transition: background-color 80ms ease;
+}
+
+/* Make intermediate wrapper spans (syntax highlighting, etc.)
+   transparent to the grid so .cm-table-cell spans become grid items. */
+.cm-table-line > *:not(.cm-table-cell) {
+  display: contents;
+}
+
+.cm-table-header {
+  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 0.88em;
+  letter-spacing: 0.01em;
+  border-bottom: 1px solid var(--divider-color);
+}
+
+.cm-table-row:hover {
+  background: var(--code-bg);
+}
+
+.cm-table-row-last {
+  border-bottom: 0.5px solid var(--divider-color);
+}
+
+.cm-table-cell {
+  display: block;
+  padding: 12px 16px;
+}
+
+.cm-table-align-left {
+  text-align: left;
+}
+
+.cm-table-align-center {
+  text-align: center;
+}
+
+.cm-table-align-right {
+  text-align: right;
+}
+
+.cm-table-cell-sep {
+  display: none;
+}
+
 .cm-scroll-line-badge {
   position: absolute;
-  right: 2px;
-  padding: 1px 5px;
+  right: 18px;
+  padding: 2px 6px;
   font-family: "SF Mono", SFMono-Regular, Menlo, Monaco, monospace;
-  font-size: 10px;
+  font-size: 16px;
   font-variant-numeric: tabular-nums;
-  line-height: 16px;
+  line-height: 22px;
   color: var(--text-muted);
   background: var(--code-bg);
   border: 1px solid var(--code-border);

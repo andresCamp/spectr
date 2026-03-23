@@ -71,6 +71,10 @@ struct EditorWebView: NSViewRepresentable {
     var zoomController: EditorZoomController
     var textScale: CGFloat
     var usesReaderWidth: Bool
+    var fileURL: URL?
+    var onScrollAtTopChanged: ((Bool) -> Void)?
+    var onError: ((String) -> Void)?
+    var reloadToken: Int = 0
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -83,6 +87,7 @@ struct EditorWebView: NSViewRepresentable {
         contentController.add(context.coordinator, name: Coordinator.MessageName.openLink.rawValue)
         contentController.add(context.coordinator, name: Coordinator.MessageName.editorReady.rawValue)
         contentController.add(context.coordinator, name: Coordinator.MessageName.editorError.rawValue)
+        contentController.add(context.coordinator, name: Coordinator.MessageName.scrollAtTop.rawValue)
         configuration.userContentController = contentController
 
         let scrollView = ZoomableEditorScrollView(configuration: configuration)
@@ -101,6 +106,10 @@ struct EditorWebView: NSViewRepresentable {
         return scrollView
     }
 
+    static func dismantleNSView(_ scrollView: ZoomableEditorScrollView, coordinator: Coordinator) {
+        scrollView.editorWebView.configuration.userContentController.removeAllScriptMessageHandlers()
+    }
+
     func updateNSView(_ scrollView: ZoomableEditorScrollView, context: Context) {
         let coordinator = context.coordinator
         coordinator.parent = self
@@ -110,6 +119,12 @@ struct EditorWebView: NSViewRepresentable {
             zoomController?.isEffectivelyZoomed == true
         }
         zoomController.attach(to: scrollView)
+
+        if coordinator.lastKnownReloadToken != reloadToken {
+            coordinator.lastKnownReloadToken = reloadToken
+            coordinator.reloadEditor()
+        }
+
         coordinator.pushStateIfNeeded()
     }
 
@@ -119,6 +134,7 @@ struct EditorWebView: NSViewRepresentable {
             case openLink
             case editorReady
             case editorError
+            case scrollAtTop
         }
 
         private static let logger = Logger(
@@ -131,11 +147,15 @@ struct EditorWebView: NSViewRepresentable {
         weak var webView: WKWebView?
 
         private var isEditorReady = false
+        private var readinessTimer: Timer?
+        private var editorErrorCount = 0
+        var lastKnownReloadToken = 0
         private var lastKnownText: String
         private var lastKnownMode: ViewMode?
         private var lastKnownTheme: String?
         private var lastKnownTextScale: CGFloat?
         private var lastKnownReaderWidth: Bool?
+        private var lastKnownFileURL: URL?
         private var modeTransitionNonce = 0
 
         init(_ parent: EditorWebView) {
@@ -157,10 +177,7 @@ struct EditorWebView: NSViewRepresentable {
 
             guard let editorURL else {
                 Self.logger.error("Editor bundle missing from app resources.")
-                webView.loadHTMLString(
-                    "<html><body style=\"font-family: -apple-system; padding: 24px;\">Missing editor bundle.</body></html>",
-                    baseURL: nil
-                )
+                reportError("Editor bundle is missing from the app.")
                 return
             }
 
@@ -168,6 +185,32 @@ struct EditorWebView: NSViewRepresentable {
                 editorURL,
                 allowingReadAccessTo: editorURL.deletingLastPathComponent()
             )
+
+            startReadinessTimer()
+        }
+
+        func reloadEditor() {
+            guard let webView else { return }
+            isEditorReady = false
+            editorErrorCount = 0
+            readinessTimer?.invalidate()
+            readinessTimer = nil
+            loadEditor(into: webView)
+        }
+
+        private func startReadinessTimer() {
+            readinessTimer?.invalidate()
+            readinessTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: false) { [weak self] _ in
+                guard let self, !self.isEditorReady else { return }
+                Self.logger.error("Editor did not signal readiness within 10 seconds.")
+                self.reportError("Editor failed to initialize.")
+            }
+        }
+
+        private func reportError(_ message: String) {
+            DispatchQueue.main.async {
+                self.parent.onError?(message)
+            }
         }
 
         func pushStateIfNeeded(force: Bool = false) {
@@ -208,6 +251,19 @@ struct EditorWebView: NSViewRepresentable {
                 lastKnownReaderWidth = parent.usesReaderWidth
                 pushReaderWidth(parent.usesReaderWidth, into: webView)
             }
+
+            if force || lastKnownFileURL != parent.fileURL {
+                lastKnownFileURL = parent.fileURL
+                pushFileInfo(parent.fileURL, into: webView)
+            }
+
+            if force {
+                evaluate(
+                    "editor.scrollToTop()",
+                    arguments: [:],
+                    in: webView
+                )
+            }
         }
 
         func userContentController(
@@ -235,12 +291,23 @@ struct EditorWebView: NSViewRepresentable {
             case .editorReady:
                 Self.logger.debug("Editor signaled readiness.")
                 isEditorReady = true
+                readinessTimer?.invalidate()
+                readinessTimer = nil
                 pushStateIfNeeded(force: true)
             case .editorError:
                 if let payload = message.body as? [String: Any] {
                     Self.logger.error("Editor error: \(String(describing: payload), privacy: .public)")
                 } else {
                     Self.logger.error("Editor error message received with unexpected payload.")
+                }
+                editorErrorCount += 1
+                if editorErrorCount >= 3 {
+                    reportError("The editor encountered repeated errors.")
+                }
+            case .scrollAtTop:
+                guard let isAtTop = message.body as? Bool else { return }
+                DispatchQueue.main.async {
+                    self.parent.onScrollAtTopChanged?(isAtTop)
                 }
             }
         }
@@ -267,6 +334,8 @@ struct EditorWebView: NSViewRepresentable {
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
             Self.logger.error("Editor web content process terminated.")
+            isEditorReady = false
+            reportError("The editor process terminated unexpectedly.")
         }
 
         private func pushText(_ text: String, into webView: WKWebView) {
@@ -348,6 +417,25 @@ struct EditorWebView: NSViewRepresentable {
             evaluate(
                 "editor.setReaderWidth(enabled)",
                 arguments: ["enabled": enabled],
+                in: webView
+            )
+        }
+
+        private func pushFileInfo(_ fileURL: URL?, into webView: WKWebView) {
+            let path = fileURL?.path(percentEncoded: false) ?? ""
+            var lastModified = ""
+            if let fileURL,
+               let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path(percentEncoded: false)),
+               let date = attrs[.modificationDate] as? Date
+            {
+                let formatter = DateFormatter()
+                formatter.dateStyle = .medium
+                formatter.timeStyle = .short
+                lastModified = formatter.string(from: date)
+            }
+            evaluate(
+                "editor.setFileInfo(path, lastModified)",
+                arguments: ["path": path, "lastModified": lastModified],
                 in: webView
             )
         }

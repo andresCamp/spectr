@@ -1,6 +1,7 @@
 # Product Documentation
 
 This folder contains the product specs for this project, managed by the [osis protocol](https://osis.dev).
+This folder contains the product specs for this project, managed by the [osis protocol](https://osis.dev).
 
 Osis is a product clarity system. It maintains two things:
 

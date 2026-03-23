@@ -69,7 +69,7 @@ function safePostMessage(name, body) {
 }
 
 function reportError(message, extra = {}) {
-  console.error("[Specter Editor]", message, extra);
+  console.error("[Spectr Editor]", message, extra);
   safePostMessage("editorError", {
     message,
     ...extra,
@@ -225,6 +225,22 @@ function scrollRawViewByLines(view, lineDelta) {
 
   scroller.scrollTop = nextScrollTop;
   return true;
+}
+
+function getTopLineNumber(view) {
+  const rect = view.contentDOM.getBoundingClientRect();
+  const scrollerRect = view.scrollDOM.getBoundingClientRect();
+  const docY = scrollerRect.top - rect.top;
+  const block = view.lineBlockAtHeight(Math.max(0, docY));
+  return view.state.doc.lineAt(block.from).number;
+}
+
+function scrollToLineNumber(view, lineNum) {
+  const clamped = clamp(lineNum, 1, view.state.doc.lines);
+  const line = view.state.doc.line(clamped);
+  view.dispatch({
+    effects: EditorView.scrollIntoView(line.from, { y: "start" }),
+  });
 }
 
 function addReplacement(decorations, atomicRanges, from, to, spec = {}) {
@@ -1174,6 +1190,51 @@ const rawActiveLineHighlights = [
   highlightActiveLineGutter(),
 ];
 
+const scrollLineIndicator = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.view = view;
+      this.hideTimer = 0;
+      this.badge = document.createElement("div");
+      this.badge.className = "cm-scroll-line-badge";
+      this.badge.setAttribute("aria-hidden", "true");
+      view.dom.appendChild(this.badge);
+      this.onScroll = () => this.show();
+      view.scrollDOM.addEventListener("scroll", this.onScroll, { passive: true });
+    }
+
+    show() {
+      const view = this.view;
+      const lineNum = getTopLineNumber(view);
+
+      this.badge.textContent = String(lineNum);
+
+      const scroller = view.scrollDOM;
+      const scrollFraction = scroller.scrollHeight > scroller.clientHeight
+        ? scroller.scrollTop / (scroller.scrollHeight - scroller.clientHeight)
+        : 0;
+      const trackPadding = 4;
+      const badgeHeight = 22;
+      const maxTop = scroller.clientHeight - badgeHeight - trackPadding;
+      const top = trackPadding + scrollFraction * maxTop;
+
+      this.badge.style.top = `${top}px`;
+      this.badge.classList.add("cm-scroll-line-badge-visible");
+
+      clearTimeout(this.hideTimer);
+      this.hideTimer = setTimeout(() => {
+        this.badge.classList.remove("cm-scroll-line-badge-visible");
+      }, 1200);
+    }
+
+    destroy() {
+      this.view.scrollDOM.removeEventListener("scroll", this.onScroll);
+      clearTimeout(this.hideTimer);
+      this.badge.remove();
+    }
+  },
+);
+
 const rawTerminalScroll = ViewPlugin.fromClass(
   class {
     constructor() {
@@ -1272,15 +1333,15 @@ const renderedCursorState = ViewPlugin.fromClass(
 );
 
 const modeClassExtension = EditorView.editorAttributes.of({
-  class: "cm-specter-rendered",
+  class: "cm-spectr-rendered",
 });
 
 const rawModeClassExtension = EditorView.editorAttributes.of({
-  class: "cm-specter-raw",
+  class: "cm-spectr-raw",
 });
 
 const readerWidthClassExtension = EditorView.editorAttributes.of({
-  class: "cm-specter-reader-width",
+  class: "cm-spectr-reader-width",
 });
 
 const baseTheme = EditorView.theme({
@@ -1388,6 +1449,7 @@ const view = new EditorView({
       gutterCompartment.of([]),
       activeLineCompartment.of([]),
       scrollBehaviorCompartment.of([]),
+      scrollLineIndicator,
       renderedCursorState,
       renderedLinkClicks,
       updateListener,
@@ -1397,6 +1459,7 @@ const view = new EditorView({
 });
 
 function setMode(mode) {
+  const topLine = getTopLineNumber(view);
   currentMode = mode === "raw" ? "raw" : "rendered";
   view.dispatch({
     effects: [
@@ -1420,6 +1483,7 @@ function setMode(mode) {
       ),
     ],
   });
+  requestAnimationFrame(() => scrollToLineNumber(view, topLine));
 }
 
 function setText(text) {
@@ -1455,7 +1519,7 @@ function setTextScale(scale) {
   const numericScale = Number(scale);
   const nextScale = Number.isFinite(numericScale) ? numericScale : 1;
   const clampedScale = Math.min(maximumTextScale, Math.max(minimumTextScale, nextScale));
-  view.dom.style.setProperty("--specter-text-scale", String(clampedScale));
+  view.dom.style.setProperty("--spectr-text-scale", String(clampedScale));
   view.requestMeasure();
 }
 

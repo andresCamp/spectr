@@ -7,7 +7,7 @@ const __dirname = path.dirname(__filename);
 
 await build({
   entryPoints: [path.join(__dirname, "src/editor.js")],
-  outfile: path.join(__dirname, "../../specter/Resources/Editor/editor.js"),
+  outfile: path.join(__dirname, "../../spectr/Resources/Editor/editor.js"),
   bundle: true,
   format: "iife",
   platform: "browser",

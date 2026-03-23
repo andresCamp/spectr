@@ -1,6 +1,6 @@
 # Phase 1 — Existing Markdown Surface
 
-**Objective:** Ship the smallest useful version of Specter: open an existing `.md` file, switch between raw and rendered views, make a light edit, and save.
+**Objective:** Ship the smallest useful version of Spectr: open an existing `.md` file, switch between raw and rendered views, make a light edit, and save.
 
 ---
 
@@ -26,7 +26,7 @@
 ## Out of Scope
 
 - Custom new-document launcher on Cmd+N
-- `~/Documents/Specter/` creation flow
+- `~/Documents/Spectr/` creation flow
 - Formatting bar
 - `NSTextView` bridge
 - Float-on-top
@@ -68,6 +68,6 @@
 ## Risks and Open Questions
 
 - **Decoration complexity.** The cursor/editing semantics have to stay correct while syntax is hidden. Keep atomic ranges separate from visible styling ranges.
-- **Bridge reliability.** Swift and JS must stay synchronized without feedback loops or trailing debounces that can leave `SpecterDocument.text` stale.
-- **Rendered styling.** The web view has to disappear visually so Specter still feels document-like rather than browser-like.
+- **Bridge reliability.** Swift and JS must stay synchronized without feedback loops or trailing debounces that can leave `SpectrDocument.text` stale.
+- **Rendered styling.** The web view has to disappear visually so Spectr still feels document-like rather than browser-like.
 - **Phase boundary discipline.** The biggest risk is re-expanding scope by pulling the launcher, formatting bar, or custom window behavior back into Phase 1.

@@ -4,25 +4,25 @@
 
 ## Product Overview
 
-Specter is a macOS document-based application built with SwiftUI. It now opens markdown files into a `WKWebView`-hosted CodeMirror 6 editor that can switch between rendered and raw views.
+Spectr is a macOS document-based application built with SwiftUI. It now opens markdown files into a `WKWebView`-hosted CodeMirror 6 editor that can switch between rendered and raw views.
 
-**Bundle ID:** `cloudnine.Specter`
+**Bundle ID:** `md.spectr.app`
 **Platform:** macOS (deployment target 26.2)
 **Architecture:** SwiftUI Document App (FileDocument)
 
 ## Systems
 
-### App Shell (`SpecterApp`)
+### App Shell (`SpectrApp`)
 The application entry point. Uses `DocumentGroup` to manage document lifecycle. Each document opens in its own window with a `DocumentView`.
 
-### Document Model (`SpecterDocument`)
+### Document Model (`SpectrDocument`)
 A `FileDocument` conforming struct that holds a single `text: String` property. Reads and writes UTF-8 markdown files and uses the markdown filename extension to determine its readable type. Default content is empty.
 
 ### Document Surface (`DocumentView` + `EditorWebView`)
 A SwiftUI document view that owns the rendered/raw toggle and embeds a `WKWebView` bridge. The web view hosts a bundled CodeMirror 6 editor, keeping the markdown string as the native source of truth while rendered mode is produced through decorations.
 
 ### Editor Bundle
-Static HTML/CSS/JS assets live under `specter/Resources/Editor`. A repo-local workspace under `tools/editor` pins the CodeMirror/esbuild dependencies and rebuilds the checked-in `editor.js` bundle.
+Static HTML/CSS/JS assets live under `spectr/Resources/Editor`. A repo-local workspace under `tools/editor` pins the CodeMirror/esbuild dependencies and rebuilds the checked-in `editor.js` bundle.
 
 ### Asset Catalog
 Accent color and app icon slots, plus bundled editor resources.
@@ -31,9 +31,9 @@ Accent color and app icon slots, plus bundled editor resources.
 
 ```
 ┌─────────────────────────────────────┐
-│           SpecterApp (@main)        │
+│           SpectrApp (@main)        │
 │                                     │
-│  DocumentGroup(SpecterDocument)     │
+│  DocumentGroup(SpectrDocument)     │
 │         │                           │
 │         ▼                           │
 │  ┌───────────────────────────────┐  │
@@ -43,7 +43,7 @@ Accent color and app icon slots, plus bundled editor resources.
 │                  │ @Binding         │
 │           ▼                         │
 │  ┌─────────────────┐                │
-│  │ SpecterDocument  │               │
+│  │ SpectrDocument  │               │
 │  │ (FileDocument)   │               │
 │  │ text: String     │               │
 │  └─────────────────┘                │

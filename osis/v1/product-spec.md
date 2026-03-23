@@ -1,4 +1,4 @@
-# Specter — Product Spec
+# Spectr — Product Spec
 
 Last updated: 2026-03-19
 
@@ -6,9 +6,9 @@ Last updated: 2026-03-19
 
 ## Product Overview
 
-Specter is a native macOS companion app for spec-driven development. It provides a quiet, minimal window for viewing and lightly editing markdown specs alongside your terminal and editor.
+Spectr is a native macOS companion app for spec-driven development. It provides a quiet, minimal window for viewing and lightly editing markdown specs alongside your terminal and editor.
 
-It fills a specific gap in the developer workflow: the thinking layer. Your terminal executes. Your editor creates. Specter holds the spec — the document that governs what you're building and why.
+It fills a specific gap in the developer workflow: the thinking layer. Your terminal executes. Your editor creates. Spectr holds the spec — the document that governs what you're building and why.
 
 ## Target User
 
@@ -18,7 +18,7 @@ They don't need another editor. They need a dedicated surface for the document t
 
 ## Core Interaction Model
 
-Specter has one view with two modes, toggled by a single button that is always accessible.
+Spectr has one view with two modes, toggled by a single button that is always accessible.
 
 ### Raw Mode
 An editable markdown surface where the same underlying document is shown with syntax visible. You see the markdown source, make the exact fix you need, and move on. It should feel restrained and source-first rather than like a general-purpose IDE.
@@ -31,7 +31,7 @@ One button. Press it, the mode switches instantly. No animation delay. No split 
 
 ## Navigation Model
 
-Navigation in Specter is transient. Elements appear when needed and disappear after selection. There is no persistent navigation UI.
+Navigation in Spectr is transient. Elements appear when needed and disappear after selection. There is no persistent navigation UI.
 
 ### Breadcrumb (rendered mode only)
 The file path appears at the top of the rendered view. Each folder segment is clickable — tap a folder to see its children as a list. Pick a file, it opens. The breadcrumb disappears back to its passive state. This is for quick lateral movement within a directory.
@@ -49,10 +49,10 @@ Both navigation elements share the same principle: appear, pick, disappear.
 
 Each spec opens in its own window via WindowGroup. No tabs. No sidebar. No split panes.
 
-This is a spatial workflow. The developer positions Specter windows beside their terminal, arranging their workspace physically. Each window is a single document.
+This is a spatial workflow. The developer positions Spectr windows beside their terminal, arranging their workspace physically. Each window is a single document.
 
 ### Float-on-Top
-A pin icon in the title bar toggles float-on-top mode. When active, the Specter window stays above all other applications. This is the core spatial feature — pin your spec above your terminal so it's always visible while you work.
+A pin icon in the title bar toggles float-on-top mode. When active, the Spectr window stays above all other applications. This is the core spatial feature — pin your spec above your terminal so it's always visible while you work.
 
 ## v1 Feature Set
 
@@ -71,7 +71,7 @@ This is the complete v1. Nothing else ships in v1.
 
 ## UI Chrome Philosophy
 
-Specter has no divider lines anywhere in the app. Zero hard edges between UI regions.
+Spectr has no divider lines anywhere in the app. Zero hard edges between UI regions.
 
 - **Gradient overlays** — Top and bottom bars use vertical linear gradient fades (transparent to opaque). Controls float over content on these faded overlays, never on solid bars.
 - **Edge-to-edge content** — Content flows to every edge of the window. Chrome floats on top of it, not beside or separated from it.
@@ -102,7 +102,7 @@ Reference: Raycast Notes fade-on-unfocus behavior.
 4. **Ambient** — Always there, never distracting. A presence, not a demand.
 5. **Native** — Feels like it shipped with the Mac. System fonts, system colors, system behaviors.
 
-## Anti-Goals (What Specter is NOT)
+## Anti-Goals (What Spectr is NOT)
 
 - **Not Notion.** No databases, no blocks, no collaboration, no cloud sync.
 - **Not VSCode.** No syntax highlighting, no extensions, no terminal integration, no git.
@@ -110,17 +110,17 @@ Reference: Raycast Notes fade-on-unfocus behavior.
 - **Not a file manager.** No file tree, no project concept, no workspace files.
 - **Not a second brain.** No linking, no tagging, no search-everything, no graph view.
 
-If a feature makes Specter feel like any of the above, it is wrong for this product.
+If a feature makes Spectr feel like any of the above, it is wrong for this product.
 
 ## Product Position
 
 ```
 Terminal (Ghostty)  →  Execution    (run, test, deploy)
-Specter             →  Thinking     (read, reference, refine)
+Spectr             →  Thinking     (read, reference, refine)
 Editor (VSCode)     →  Creation     (write code, build features)
 ```
 
-Specter is the middle layer. It doesn't replace either side. It exists because the other two are too loud for the job of holding a spec quietly.
+Spectr is the middle layer. It doesn't replace either side. It exists because the other two are too loud for the job of holding a spec quietly.
 
 ## Technical Constraints
 

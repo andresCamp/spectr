@@ -56,6 +56,7 @@ struct DocumentView: View {
     @State private var isScrolledAtTop = true
     @State private var editorError: String?
     @State private var editorReloadToken = 0
+    @StateObject private var chromeController = WindowChromeController()
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -85,6 +86,7 @@ struct DocumentView: View {
             for: .window
         )
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        .toolbar(removing: .title)
         .background(
             WindowAccessorView { window in
                 currentWindow = window
@@ -94,11 +96,23 @@ struct DocumentView: View {
                     text: $document.text
                 )
                 windowPinController.attach(to: window)
+                chromeController.attach(to: window)
             }
         )
         .overlay(alignment: .top) {
             TitleBarFadeOverlay(colorScheme: colorScheme)
                 .opacity(isScrolledAtTop ? 0 : 1)
+        }
+        .overlay(alignment: .bottomLeading) {
+            if viewMode == .rendered {
+                DocumentStatsBadge(text: document.text)
+                    .opacity(chromeController.isWindowHovered ? 1 : 0)
+                    .allowsHitTesting(chromeController.isWindowHovered)
+                    .animation(.easeOut(duration: 0.2), value: chromeController.isWindowHovered)
+                    .padding(.leading, 18)
+                    .padding(.bottom, 18)
+                    .transition(.opacity)
+            }
         }
         .overlay(alignment: .bottomTrailing) {
             Group {
@@ -112,6 +126,9 @@ struct DocumentView: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
+            .opacity(chromeController.isWindowHovered ? 1 : 0)
+            .allowsHitTesting(chromeController.isWindowHovered)
+            .animation(.easeOut(duration: 0.2), value: chromeController.isWindowHovered)
             .padding(.trailing, 18)
             .padding(.bottom, 18)
         }
@@ -135,6 +152,15 @@ struct DocumentView: View {
         .focusedSceneValue(\.quickOpenAction) {
             showQuickOpen.toggle()
         }
+        .focusedSceneValue(\.toggleViewModeAction) {
+            viewMode = viewMode.toggled
+        }
+        .focusedSceneValue(\.togglePinAction) {
+            isPinned.toggle()
+        }
+        .focusedSceneValue(\.toggleReaderWidthAction) {
+            usesReaderWidth.toggle()
+        }
         .focusedSceneValue(
             \.editorTextSizeActions,
             EditorTextSizeActions(
@@ -156,6 +182,7 @@ struct DocumentView: View {
         .onDisappear {
             editorZoomController.onMagnificationChanged = nil
             fileSyncController.disconnect()
+            chromeController.detach()
         }
         .onChange(of: fileURL) { _, newValue in
             fileSyncController.configure(
@@ -178,30 +205,42 @@ struct DocumentView: View {
             Text("Another process changed this file on disk. Reload to discard Spectr’s current in-memory edits, or keep working with the local version.")
         }
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                HStack(spacing: 2) {
-                    GhostToolbarIconButton(
-                        systemName: isPinned ? "pin.fill" : "pin",
-                        helpText: isPinned ? "Unpin Window" : "Pin Window on Top",
-                        isActive: isPinned
-                    ) {
-                        isPinned.toggle()
-                    }
+            WindowTitleToolbarContent(
+                titleText: firstLineTitle,
+                fileDisplayName: fileDisplayName,
+                isWindowHovered: chromeController.isWindowHovered
+            )
 
-                    GhostToolbarIconButton(
-                        systemName: viewMode.iconName,
-                        helpText: viewMode.helpText
-                    ) {
-                        viewMode = viewMode.toggled
-                    }
-                }
-            }
-            .sharedBackgroundVisibility(.hidden)
+            WindowActionsToolbarContent(
+                isPinned: $isPinned,
+                viewMode: $viewMode,
+                isVisible: chromeController.isWindowHovered
+            )
         }
         .animation(.spring(response: 0.24, dampingFraction: 0.86), value: isZoomed)
         .animation(.spring(response: 0.24, dampingFraction: 0.86), value: viewMode)
         .animation(.easeInOut(duration: 0.2), value: isScrolledAtTop)
         .commandHoldShortcuts()
+    }
+
+    private var firstLineTitle: String {
+        let text = document.text
+        let line: Substring
+        if let newline = text.firstIndex(of: "\n") {
+            line = text[text.startIndex..<newline]
+        } else {
+            line = text[...]
+        }
+        var title = line.trimmingCharacters(in: .whitespaces)
+        if title.hasPrefix("#") {
+            title = String(title.drop(while: { $0 == "#" }))
+                .trimmingCharacters(in: .whitespaces)
+        }
+        return title.isEmpty ? "Untitled" : String(title.prefix(60))
+    }
+
+    private var fileDisplayName: String {
+        fileURL?.deletingPathExtension().lastPathComponent ?? "Untitled"
     }
 
     private var isZoomed: Bool {
@@ -232,6 +271,75 @@ struct DocumentView: View {
     }
 }
 
+private struct WindowTitleToolbarContent: ToolbarContent {
+    var titleText: String
+    var fileDisplayName: String
+    var isWindowHovered: Bool
+
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            WindowTitleLabel(
+                titleText: titleText,
+                fileDisplayName: fileDisplayName,
+                isWindowHovered: isWindowHovered
+            )
+        }
+        .sharedBackgroundVisibility(.hidden)
+    }
+}
+
+private struct WindowActionsToolbarContent: ToolbarContent {
+    @Binding var isPinned: Bool
+    @Binding var viewMode: ViewMode
+    var isVisible: Bool
+
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            HStack(spacing: 2) {
+                GhostToolbarIconButton(
+                    systemName: isPinned ? "pin.fill" : "pin",
+                    helpText: isPinned ? "Unpin Window" : "Pin Window on Top",
+                    isActive: isPinned
+                ) {
+                    isPinned.toggle()
+                }
+                .shortcutTooltip(ShortcutHint(isPinned ? "Unpin" : "Pin Window", ["⌘", "⇧"], "P"))
+
+                GhostToolbarIconButton(
+                    systemName: viewMode.iconName,
+                    helpText: viewMode.helpText
+                ) {
+                    viewMode = viewMode.toggled
+                }
+                .shortcutTooltip(ShortcutHint(viewMode == .rendered ? "Raw Mode" : "Rendered", ["⌘"], "R"))
+            }
+            .opacity(isVisible ? 1 : 0)
+            .allowsHitTesting(isVisible)
+            .animation(.easeOut(duration: 0.2), value: isVisible)
+        }
+        .sharedBackgroundVisibility(.hidden)
+    }
+}
+
+private struct WindowTitleLabel: View {
+    var titleText: String
+    var fileDisplayName: String
+    var isWindowHovered: Bool
+    @State private var isTitleHovered = false
+
+    var body: some View {
+        Text(isTitleHovered ? fileDisplayName : titleText)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(.primary.opacity(isWindowHovered ? 0.5 : 0.25))
+            .lineLimit(1)
+            .onHover { hovering in
+                isTitleHovered = hovering
+            }
+            .animation(.easeOut(duration: 0.2), value: isWindowHovered)
+            .animation(.easeOut(duration: 0.15), value: isTitleHovered)
+    }
+}
+
 private struct GhostToolbarIconButton: View {
     var systemName: String
     var helpText: String
@@ -253,7 +361,6 @@ private struct GhostToolbarIconButton: View {
         .onHover { hovering in
             isHovered = hovering
         }
-        .help(helpText)
         .accessibilityLabel(helpText)
         .animation(.easeOut(duration: 0.12), value: isHovered)
     }
@@ -304,7 +411,7 @@ private struct ZoomResetBadge: View {
             }
         }
         .buttonStyle(.plain)
-        .help("Reset Pinch Zoom")
+        .shortcutTooltip(ShortcutHint("Reset Zoom", ["⌘"], "0"), delay: 0.3)
     }
 }
 
@@ -325,7 +432,66 @@ private struct MarginsToggle: View {
                 }
         }
         .buttonStyle(.plain)
-        .help(isEnabled ? "Use Wide Margins" : "Use Narrow Margins")
+        .shortcutTooltip(ShortcutHint(isEnabled ? "Full Bleed" : "Reader Width", ["⌘", "⇧"], "M"))
+    }
+}
+
+// MARK: - Document Stats Badge
+
+private enum StatMetric: CaseIterable {
+    case characters, tokens, words
+
+    func format(_ text: String) -> String {
+        switch self {
+        case .characters:
+            let count = text.count
+            return "\(count.formatted()) character\(count == 1 ? "" : "s")"
+        case .words:
+            var wordCount = 0
+            text.enumerateSubstrings(
+                in: text.startIndex...,
+                options: [.byWords, .substringNotRequired]
+            ) { _, _, _, _ in wordCount += 1 }
+            return "\(wordCount.formatted()) word\(wordCount == 1 ? "" : "s")"
+        case .tokens:
+            // Approximate: ~4 characters per token (GPT/Claude convention)
+            let estimate = max(1, text.count / 4)
+            return "~\(estimate.formatted()) token\(estimate == 1 ? "" : "s")"
+        }
+    }
+}
+
+private struct DocumentStatsBadge: View {
+    let text: String
+    @State private var metric: StatMetric = .characters
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Button {
+            let all = StatMetric.allCases
+            let idx = all.firstIndex(of: metric) ?? 0
+            metric = all[(idx + 1) % all.count]
+        } label: {
+            Text(metric.format(text))
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .contentTransition(.numericText())
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.thinMaterial, in: Capsule())
+                .overlay {
+                    Capsule()
+                        .strokeBorder(
+                            colorScheme == .dark
+                                ? Color.white.opacity(0.12)
+                                : Color.black.opacity(0.08),
+                            lineWidth: 0.5
+                        )
+                }
+        }
+        .buttonStyle(.plain)
+        .animation(.easeOut(duration: 0.15), value: metric)
     }
 }
 
@@ -378,9 +544,9 @@ private struct AmbientWindowBackground: View {
 
             LinearGradient(
                 colors: [
-                    Color.white.opacity(colorScheme == .dark ? 0.04 : 0.16),
+                    Color.white.opacity(colorScheme == .dark ? 0.04 : 0.22),
                     .clear,
-                    Color.black.opacity(colorScheme == .dark ? 0.08 : 0.03),
+                    Color.black.opacity(colorScheme == .dark ? 0.08 : 0.01),
                 ],
                 startPoint: .top,
                 endPoint: .bottom
@@ -394,7 +560,7 @@ private struct AmbientWindowBackground: View {
         case .dark:
             return Color(red: 0.14, green: 0.11, blue: 0.10).opacity(0.56)
         default:
-            return Color(red: 0.96, green: 0.94, blue: 0.92).opacity(0.62)
+            return Color(red: 0.99, green: 0.98, blue: 0.97).opacity(0.72)
         }
     }
 
@@ -408,9 +574,9 @@ private struct AmbientWindowBackground: View {
             ]
         default:
             return [
-                Color.white.opacity(0.35),
+                Color.white.opacity(0.55),
+                Color.white.opacity(0.12),
                 Color.clear,
-                Color(red: 0.84, green: 0.80, blue: 0.76).opacity(0.10),
             ]
         }
     }
@@ -425,9 +591,9 @@ private struct AmbientWindowBackground: View {
             ]
         default:
             return [
-                Color.white.opacity(0.16),
-                Color(red: 0.95, green: 0.91, blue: 0.87).opacity(0.07),
-                Color(red: 0.90, green: 0.88, blue: 0.84).opacity(0.03),
+                Color.white.opacity(0.25),
+                Color(red: 0.98, green: 0.96, blue: 0.94).opacity(0.10),
+                Color.clear,
             ]
         }
     }
@@ -478,8 +644,8 @@ private struct TitleBarFadeOverlay: View {
             ]
         default:
             return [
-                Color.white.opacity(0.26),
-                Color(red: 0.93, green: 0.90, blue: 0.86).opacity(0.10),
+                Color.white.opacity(0.40),
+                Color.white.opacity(0.10),
                 .clear,
             ]
         }

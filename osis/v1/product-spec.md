@@ -1,149 +1,146 @@
 # Spectr — Product Spec
 
-Last updated: 2026-03-19
+Last updated: 2026-03-24
 
 ---
 
 ## Product Overview
 
-Spectr is a native macOS companion app for spec-driven development. It provides a quiet, minimal window for viewing and lightly editing markdown specs alongside your terminal and editor.
+Spectr is a native macOS app for reading and editing markdown files. It exists because nothing else makes markdown look beautiful.
 
-It fills a specific gap in the developer workflow: the thinking layer. Your terminal executes. Your editor creates. Spectr holds the spec — the document that governs what you're building and why.
+Open a `.md` file. It renders with clean typography, generous spacing, and thoughtful hierarchy. Edit a line. Save. Pin it beside your terminal. That's the whole product.
+
+## Positioning
+
+**The most beautiful way to read and edit markdown on macOS.**
+
+The easiest upgrade to your development workflow. You read markdown every day — it should look incredible. $14.99 once.
 
 ## Target User
 
-Developers who work spec-first. They write product specs, architecture docs, or decision logs before (and during) implementation. They use a terminal-centric workflow. They value clarity, minimalism, and tools that stay out of the way.
+Anyone who reads markdown files regularly. Developers are the core audience — they live in READMEs, specs, changelogs, and docs every day. But Spectr is for anyone who wants their `.md` files to look good.
 
-They don't need another editor. They need a dedicated surface for the document they keep referencing.
+They don't need another editor. They need a beautiful surface for the files they already have.
 
 ## Core Interaction Model
 
-Spectr has one view with two modes, toggled by a single button that is always accessible.
+Spectr has one view with two modes, toggled by ⌘R.
+
+### Rendered Mode (default)
+A clean rendered document surface. The document looks like a sheet of paper — clean typography, generous spacing, thoughtful hierarchy. Uses CodeMirror 6 decorations inside a `WKWebView` so markdown stays the source of truth while syntax is visually hidden. Not "rendered HTML in a web view." A designed reading experience.
 
 ### Raw Mode
-An editable markdown surface where the same underlying document is shown with syntax visible. You see the markdown source, make the exact fix you need, and move on. It should feel restrained and source-first rather than like a general-purpose IDE.
-
-### Rendered Mode
-A clean rendered document surface that is still editing the underlying markdown source. Phase 1 uses CodeMirror 6 decorations inside a `WKWebView` so markdown stays the source of truth while syntax is visually hidden. The document should look like a sheet of paper — clean typography, generous spacing, thoughtful hierarchy. Not "rendered HTML in a web view."
+The same document with markdown syntax visible. Make the exact edit you need and move on. Restrained and source-first.
 
 ### Toggle
-One button. Press it, the mode switches instantly. No animation delay. No split view. You're either reading or editing. That's it.
+⌘R. Instant switch. No animation delay. No split view.
 
-## Navigation Model
+## Navigation
 
-Navigation in Spectr is transient. Elements appear when needed and disappear after selection. There is no persistent navigation UI.
+Navigation is transient. Appear, pick, disappear.
+
+### Quick Open (⌘P)
+A floating panel with search and a card grid. Scans the project root for all `.md` files. Each card shows a fingerprint mosaic — a deterministic visual pattern unique to each file's content. Grouped by directory, sorted by proximity. Keyboard and mouse.
 
 ### Breadcrumb (rendered mode only)
-The file path appears at the top of the rendered view. Each folder segment is clickable — tap a folder to see its children as a list. Pick a file, it opens. The breadcrumb disappears back to its passive state. This is for quick lateral movement within a directory.
+File path at top. Clickable folder segments for lateral movement.
 
-### Card Switcher
-Triggered by a button in the top-left corner or by ⌘K. When activated, the current document blurs and a flat grid of cards appears. Each card shows a rendered markdown preview of an open document with the breadcrumb/file path on the card itself. Paginated at 20 cards with a "show more" option.
+## Welcome Screen
 
-Pick a card, it opens. Press Escape, it closes. The switcher is for jumping between open specs.
-
-The breadcrumb/path appears on each card in the switcher — NOT in the main document view. The document view itself has no breadcrumb. It shows only the title, content, and floating controls.
-
-Both navigation elements share the same principle: appear, pick, disappear.
+Shown on launch. App icon, "New Document" and "Open File" cards, recent files list. Dismisses when a document opens.
 
 ## Window Model
 
-Each spec opens in its own window via WindowGroup. No tabs. No sidebar. No split panes.
+Each file opens in its own window. No tabs. No sidebar. No split panes.
 
-This is a spatial workflow. The developer positions Spectr windows beside their terminal, arranging their workspace physically. Each window is a single document.
+### Float-on-Top (⌘⇧P)
+Pin the window above all other apps. The core spatial feature.
 
-### Float-on-Top
-A pin icon in the title bar toggles float-on-top mode. When active, the Spectr window stays above all other applications. This is the core spatial feature — pin your spec above your terminal so it's always visible while you work.
+### Reader Width (⌘⇧M)
+Toggle between full-width and constrained margins.
 
 ## v1 Feature Set
 
-1. **New window** — ⌘N creates a new empty spec window
-2. **Open file** — Open any .md file from disk
-3. **Edit markdown** — Raw mode with visible markdown syntax
-4. **Render markdown** — Rendered mode with editable CodeMirror 6 decorations in Phase 1
-5. **Toggle modes** — Single button switches between raw and rendered, always accessible
-6. **Save file** — Standard ⌘S, backed by FileDocument
-7. **Breadcrumb navigation** — File path in rendered view, clickable folder segments
-8. **Card switcher** — Top-left button + ⌘K, grid of open document previews
-9. **Float-on-top toggle** — Pin icon in title bar, keeps window above all apps
-10. **Dark/light mode** — Follows system appearance automatically
+1. **Welcome screen** — New Document, Open File, recent files
+2. **Open file** — Any `.md` file from disk
+3. **Rendered mode** — Beautiful rendered markdown, editable
+4. **Raw mode** — Markdown source with syntax visible
+5. **Toggle modes** — ⌘R, instant switch
+6. **Save** — ⌘S, FileDocument
+7. **Quick Open** — ⌘P, project-wide search with fingerprint cards
+8. **Float-on-top** — ⌘⇧P, pin above all windows
+9. **Reader width** — ⌘⇧M, toggle margins
+10. **Dark/light mode** — Follows system
 
-This is the complete v1. Nothing else ships in v1.
+### Keyboard Shortcuts
 
-## UI Chrome Philosophy
+| Shortcut | Action |
+|---|---|
+| ⌘R | Toggle rendered/raw |
+| ⌘P | Quick Open |
+| ⌘⇧P | Pin on top |
+| ⌘⇧M | Toggle reader margins |
+| ⌘N | New document |
+| ⌘S | Save |
 
-Spectr has no divider lines anywhere in the app. Zero hard edges between UI regions.
+## Design Philosophy
 
-- **Gradient overlays** — Top and bottom bars use vertical linear gradient fades (transparent to opaque). Controls float over content on these faded overlays, never on solid bars.
-- **Edge-to-edge content** — Content flows to every edge of the window. Chrome floats on top of it, not beside or separated from it.
-- **Icon-only controls** — All title bar buttons are icon-only with tooltips. No text labels.
-- **SF Symbols** — All icons use SF Symbols matching Xcode's icon style: monochrome, native.
+**No lines.** Zero divider lines anywhere. No hard edges between UI regions.
 
-### Raw Mode Bottom Bar
+**Gradient overlays.** Top and bottom bars use vertical gradient fades. Controls float over content, never on solid bars.
 
-A markdown formatting toolbar floats at the bottom of raw/edit mode on a vertical linear fade (not a solid bar).
+**Edge-to-edge.** Content flows to every edge. Chrome floats on top.
 
-Controls: heading dropdown (H with chevron), bold, italic, strikethrough, underline, code, link, image, table, ordered list, unordered list, blockquote.
+**Icon-only.** SF Symbols, Xcode-style. No text labels. Tooltips only.
 
-SF Symbol icons, Xcode-style. No dividers between icons.
+**Fade on unfocus.** When the window loses focus, all chrome fades out. Only content remains. When focus returns, chrome fades back. Reference: Raycast Notes.
 
-### Focus/Unfocus Behavior
-
-When the window loses focus, all chrome (buttons, title, formatting bar) fades out. Only content remains visible. The window becomes a pure projection surface.
-
-When the window gains focus, chrome fades back in.
-
-Reference: Raycast Notes fade-on-unfocus behavior.
+**Formatting bar.** Floats at bottom in raw mode on a gradient fade. Heading, bold, italic, strikethrough, underline, code, link, image, table, lists, blockquote.
 
 ## UX Principles
 
-1. **Instant** — Opens fast, switches fast. No loading states, no spinners.
-2. **Minimal** — Almost no UI chrome. The document fills the window.
-3. **Calm** — Feels like a document, not an application. No urgency, no notifications.
-4. **Ambient** — Always there, never distracting. A presence, not a demand.
-5. **Native** — Feels like it shipped with the Mac. System fonts, system colors, system behaviors.
+1. **Beautiful** — The primary differentiator. Every pixel is intentional.
+2. **Instant** — Opens fast, switches fast. No loading states.
+3. **Minimal** — Almost no chrome. The document fills the window.
+4. **Calm** — Feels like a document, not an application.
+5. **Native** — Feels like it shipped with the Mac.
 
-## Anti-Goals (What Spectr is NOT)
+## Anti-Goals
 
-- **Not Notion.** No databases, no blocks, no collaboration, no cloud sync.
-- **Not VSCode.** No syntax highlighting, no extensions, no terminal integration, no git.
-- **Not a Markdown IDE.** No live preview split, no export to PDF, no table-of-contents sidebar.
-- **Not a file manager.** No file tree, no project concept, no workspace files.
-- **Not a second brain.** No linking, no tagging, no search-everything, no graph view.
+- **Not Obsidian.** No vault, no graph, no plugins, no linking, no second brain.
+- **Not VSCode.** No extensions, no terminal, no git, no forty tabs.
+- **Not Notion.** No databases, no blocks, no collaboration, no cloud.
+- **Not a Markdown IDE.** No live preview split, no export, no TOC sidebar.
+- **Not a file manager.** No file tree, no project concept.
 
-If a feature makes Spectr feel like any of the above, it is wrong for this product.
+If a feature makes Spectr feel like any of the above, it's wrong for this product.
 
-## Product Position
+## Business Model
 
-```
-Terminal (Ghostty)  →  Execution    (run, test, deploy)
-Spectr             →  Thinking     (read, reference, refine)
-Editor (VSCode)     →  Creation     (write code, build features)
-```
-
-Spectr is the middle layer. It doesn't replace either side. It exists because the other two are too loud for the job of holding a spec quietly.
+Open source on GitHub. $14.99 one-time on the Mac App Store (48-hour trial, read-only after expiry). Direct sales via Gumroad. No subscription, ever. See `monetization.md`.
 
 ## Technical Constraints
 
-- **SwiftUI** — Declarative UI, modern macOS framework
-- **FileDocument** — Value-type document model, system-managed lifecycle
-- **WindowGroup** — Each document gets its own native window
-- **WKWebView** — Native shell for the bundled browser editor surface
-- **CodeMirror 6** — Shared editor engine for both raw and rendered modes
-- **macOS only** — No iOS, no iPadOS, no cross-platform
-- **Minimal dependencies** — Phase 1 keeps web dependencies build-time only and ships a checked-in editor bundle inside the app
-- **Sandboxed** — Read/write file access via system file dialogs
+- **SwiftUI** — macOS native
+- **FileDocument** — System-managed document lifecycle
+- **WindowGroup** — One window per document
+- **WKWebView** — Hosts the CodeMirror 6 editor
+- **CodeMirror 6** — Shared engine for both modes
+- **StoreKit 2** — On-device purchase verification
+- **macOS only** — No cross-platform
+- **Sandboxed** — Read/write via system dialogs
 
 ## Roadmap
 
-### v1 — Locked
-The ten features listed above. The goal is a functional, opinionated spec viewer that a developer can keep open all day.
+### v1 — Ship It
+The ten features above plus StoreKit paywall. Ship a beautiful, opinionated markdown viewer that people screenshot and share.
 
-### Future Considerations (not committed)
-- **Auto-reload** — Watch the file on disk and reload when it changes externally (e.g., when Claude Code writes to a spec). This is high-value for the terminal workflow.
-- **Typography refinements** — Custom font choices, adjustable spacing, reader-mode polish.
-- **Decoration coverage refinements** — Expand markdown coverage and editing semantics as the rendered surface matures.
-- **Keyboard-driven navigation** — Full keyboard flow for breadcrumb and card switcher.
-- **Window state persistence** — Remember window positions and open documents across launches.
-- **Custom file association** — Own the .md extension or a custom extension for spec files.
+### v2 — Customize + Agent Layer
 
-These are directions, not promises. Each will be evaluated against the core principles before any work begins.
+Personalization (settings, custom colors, typography) and the beginning of agent integration (comment system, CLI skill, agent handoff via comments). See `phase-2-customize-and-agent/game-plan.md` for details.
+
+### Future (not committed)
+- Expanded decoration coverage
+- Keyboard-driven breadcrumb navigation
+- Window state persistence across launches
+- Custom file association for `.md`

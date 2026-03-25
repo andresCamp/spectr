@@ -4,7 +4,7 @@
   --bg-primary: transparent;
   --code-bg: #f5f5f7;
   --code-border: rgba(29, 29, 31, 0.08);
-  --trim-color: #d9b24a;
+  --trim-color: #8a6528;
   --link-color: var(--trim-color);
   --link-underline: color-mix(in srgb, var(--trim-color) 28%, transparent);
   --list-bullet-color: var(--trim-color);

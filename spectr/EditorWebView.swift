@@ -23,7 +23,12 @@ final class ZoomableEditorWebView: WKWebView {
 
     override func scrollWheel(with event: NSEvent) {
         if let scrollView = enclosingScrollView, isZoomActive?() == true {
-            scrollView.scrollWheel(with: event)
+            let isHorizontal = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
+            if isHorizontal {
+                scrollView.scrollWheel(with: event)
+            } else {
+                super.scrollWheel(with: event)
+            }
             return
         }
 
@@ -216,6 +221,14 @@ struct EditorWebView: NSViewRepresentable {
         func pushStateIfNeeded(force: Bool = false) {
             guard isEditorReady, let webView else { return }
 
+            // Theme must be set before text so the mosaic fingerprint
+            // reads the correct CSS variables and appearance on first draw.
+            let theme = parent.colorScheme == .dark ? "dark" : "light"
+            if force || lastKnownTheme != theme {
+                lastKnownTheme = theme
+                pushTheme(theme, into: webView)
+            }
+
             if force || parent.text != lastKnownText {
                 lastKnownText = parent.text
                 pushText(parent.text, into: webView)
@@ -234,12 +247,6 @@ struct EditorWebView: NSViewRepresentable {
                         in: webView
                     )
                 }
-            }
-
-            let theme = parent.colorScheme == .dark ? "dark" : "light"
-            if force || lastKnownTheme != theme {
-                lastKnownTheme = theme
-                pushTheme(theme, into: webView)
             }
 
             if force || lastKnownTextScale != parent.textScale {

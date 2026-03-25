@@ -4,7 +4,7 @@
 
 ## Product Overview
 
-Spectr is a macOS document-based application built with SwiftUI. It now opens markdown files into a `WKWebView`-hosted CodeMirror 6 editor that can switch between rendered and raw views.
+Spectr is the most beautiful way to read and edit markdown on macOS. Open a `.md` file and it looks incredible — clean typography, generous spacing, thoughtful design. Raycast Notes energy, but for real files on disk. 48-hour free trial, $14.99 one-time on the Mac App Store. Open source on GitHub.
 
 **Bundle ID:** `md.spectr.app`
 **Platform:** macOS (deployment target 26.2)
@@ -13,50 +13,69 @@ Spectr is a macOS document-based application built with SwiftUI. It now opens ma
 ## Systems
 
 ### App Shell (`SpectrApp`)
-The application entry point. Uses `DocumentGroup` to manage document lifecycle. Each document opens in its own window with a `DocumentView`.
+The application entry point. Uses `DocumentGroup` to manage document lifecycle. Each document opens in its own window with a `DocumentView`. A separate `Window(id: "welcome")` shows the welcome screen on launch.
+
+Menu commands are defined in `QuickOpenCommands`: ⌘P (Quick Open), ⌘R (toggle mode), ⌘⇧P (pin), ⌘⇧M (reader margins).
+
+### Welcome Screen (`WelcomeWindow`)
+A 600×520 launch window with the app icon, "New Document" and "Open File" action cards, and a recent files list from `NSDocumentController`. Dismisses when a document opens. Warm-tinted background with subtle gradient.
 
 ### Document Model (`SpectrDocument`)
-A `FileDocument` conforming struct that holds a single `text: String` property. Reads and writes UTF-8 markdown files and uses the markdown filename extension to determine its readable type. Default content is empty.
+A `FileDocument` conforming struct that holds a single `text: String` property. Reads and writes UTF-8 markdown files via `UTType.markdown`. Default content is empty.
 
 ### Document Surface (`DocumentView` + `EditorWebView`)
-A SwiftUI document view that owns the rendered/raw toggle and embeds a `WKWebView` bridge. The web view hosts a bundled CodeMirror 6 editor, keeping the markdown string as the native source of truth while rendered mode is produced through decorations.
+A SwiftUI document view that owns the rendered/raw toggle (⌘R) and embeds a `WKWebView` bridge. The web view hosts a bundled CodeMirror 6 editor, keeping the markdown string as the native source of truth while rendered mode is produced through decorations.
+
+Supports float-on-top (⌘⇧P) and reader width toggle (⌘⇧M).
+
+### Quick Open Panel (`QuickOpenPanel`)
+A floating overlay triggered by ⌘P. Scans the project root (detected via `.git`/`.gitignore`/`.github` markers) for all `.md` files. Displays a card grid grouped by directory, sorted by proximity to the current file.
+
+Each card shows a **fingerprint mosaic** — a deterministic visual pattern generated from the file's content hash using FNV-1a and Mulberry32 PRNG (matching implementations in both Swift and `editor.js`). Cards support keyboard navigation (arrow keys + Enter) and mouse.
+
+Opening a file replaces the current document in the same window position.
 
 ### Editor Bundle
 Static HTML/CSS/JS assets live under `spectr/Resources/Editor`. A repo-local workspace under `tools/editor` pins the CodeMirror/esbuild dependencies and rebuilds the checked-in `editor.js` bundle.
 
 ### Asset Catalog
-Accent color and app icon slots, plus bundled editor resources.
+Accent color, trim color, and app icon slots, plus bundled editor resources.
 
 ## System Diagram
 
 ```
-┌─────────────────────────────────────┐
-│           SpectrApp (@main)        │
-│                                     │
-│  DocumentGroup(SpectrDocument)     │
-│         │                           │
-│         ▼                           │
-│  ┌───────────────────────────────┐  │
-│  │        DocumentView           │  │
-│  │  toolbar toggle + EditorView  │  │
-│  └───────────────┬───────────────┘  │
-│                  │ @Binding         │
-│           ▼                         │
-│  ┌─────────────────┐                │
-│  │ SpectrDocument  │               │
-│  │ (FileDocument)   │               │
-│  │ text: String     │               │
-│  └─────────────────┘                │
-│           │                         │
-│           ▼                         │
-│          .md files (UTF-8)          │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│            SpectrApp (@main)             │
+│                                          │
+│  Window("welcome")   DocumentGroup       │
+│       │                    │             │
+│       ▼                    ▼             │
+│  WelcomeView         DocumentView        │
+│  ┌────────────┐      ┌──────────────┐   │
+│  │ Icon/Title │      │ EditorWebView│   │
+│  │ New / Open │      │ (WKWebView)  │   │
+│  │ Recents    │      │ CM6 + Bridge │   │
+│  └────────────┘      └──────┬───────┘   │
+│                             │            │
+│                    QuickOpenPanel (⌘P)   │
+│                    ┌──────────────┐      │
+│                    │ Search + Grid│      │
+│                    │ Fingerprints │      │
+│                    └──────────────┘      │
+│                             │            │
+│                      SpectrDocument      │
+│                      (FileDocument)      │
+│                      text: String        │
+│                             │            │
+│                        .md files         │
+└──────────────────────────────────────────┘
 ```
 
 ## State Summary
 
-- **Files:** SwiftUI document shell plus bundled editor resources
-- **Dependencies:** SwiftUI + WebKit at runtime, CodeMirror 6 + esbuild in the local editor workspace
+- **Files:** SwiftUI document shell, welcome screen, quick open panel, bundled editor resources
+- **Dependencies:** SwiftUI + WebKit + StoreKit 2 at runtime, CodeMirror 6 + esbuild in the local editor workspace
 - **Tests:** None
 - **Build:** Single macOS target, sandboxed, read/write file access
-- **Maturity:** Phase 1 custom document surface implemented.
+- **Business model:** OSS on GitHub, $14.99 one-time on App Store (48-hour trial), Gumroad direct sales
+- **Maturity:** v1 feature-complete, pre-launch. Needs paywall integration and App Store submission.

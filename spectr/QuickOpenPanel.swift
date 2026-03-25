@@ -177,6 +177,11 @@ private struct Mulberry32 {
 private struct FingerprintCanvas: View {
     let contentHash: UInt32
     let trimColor: Color
+    let colorScheme: ColorScheme
+
+    private var neutralTile: Color {
+        colorScheme == .dark ? .white : .black
+    }
 
     var body: some View {
         Canvas { context, size in
@@ -192,6 +197,10 @@ private struct FingerprintCanvas: View {
             let cols = Int(ceil(w / step))
             let rows = Int(ceil(h / step))
 
+            let isDark = colorScheme == .dark
+            let trimRange = isDark ? (lo: 0.08, hi: 0.22) : (lo: 0.14, hi: 0.32)
+            let neutralRange = isDark ? (lo: 0.04, hi: 0.09) : (lo: 0.06, hi: 0.14)
+
             for row in 0..<rows {
                 for col in 0..<cols {
                     let v = rng.next()
@@ -202,11 +211,11 @@ private struct FingerprintCanvas: View {
                     let rect = CGRect(x: x, y: y, width: tileSize, height: tileSize)
 
                     if v < 0.65 {
-                        let opacity = 0.08 + rng.next() * 0.22
+                        let opacity = trimRange.lo + rng.next() * trimRange.hi
                         context.fill(Path(rect), with: .color(trimColor.opacity(opacity)))
                     } else {
-                        let opacity = 0.04 + rng.next() * 0.09
-                        context.fill(Path(rect), with: .color(.white.opacity(opacity)))
+                        let opacity = neutralRange.lo + rng.next() * neutralRange.hi
+                        context.fill(Path(rect), with: .color(neutralTile.opacity(opacity)))
                     }
                 }
             }
@@ -266,7 +275,7 @@ struct QuickOpenPanel: View {
     var body: some View {
         ZStack {
             // Backdrop
-            Color.black.opacity(0.35)
+            Color.black.opacity(colorScheme == .dark ? 0.35 : 0.20)
                 .ignoresSafeArea()
                 .onTapGesture { dismiss() }
 
@@ -277,7 +286,7 @@ struct QuickOpenPanel: View {
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(.secondary)
 
-                    TextField("Search notes…", text: $query)
+                    TextField("Search .md files…", text: $query)
                         .textFieldStyle(.plain)
                         .font(.system(size: 15))
                         .focused($isSearchFocused)
@@ -346,7 +355,8 @@ struct QuickOpenPanel: View {
                             .padding(16)
                         }
                         .onChange(of: selectedIndex) { _, newIndex in
-                            if let newIndex, newIndex < filtered.count {
+                            if inputMode == .keyboard,
+                               let newIndex, newIndex < filtered.count {
                                 withAnimation(.easeOut(duration: 0.1)) {
                                     proxy.scrollTo(filtered[newIndex].id, anchor: .center)
                                 }
@@ -356,12 +366,26 @@ struct QuickOpenPanel: View {
                 }
             }
             .frame(width: 520, height: 440)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(colorScheme == .dark
+                        ? AnyShapeStyle(.ultraThinMaterial)
+                        : AnyShapeStyle(Color(white: 0.97)))
+            }
             .overlay {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
+                    .strokeBorder(
+                        colorScheme == .dark
+                            ? Color.white.opacity(0.12)
+                            : Color.black.opacity(0.08),
+                        lineWidth: 0.5
+                    )
             }
-            .shadow(color: .black.opacity(0.35), radius: 40, y: 12)
+            .shadow(
+                color: .black.opacity(colorScheme == .dark ? 0.35 : 0.18),
+                radius: colorScheme == .dark ? 40 : 30,
+                y: 12
+            )
         }
         .onAppear {
             isSearchFocused = true
@@ -443,7 +467,7 @@ private struct QuickOpenCard: View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 0) {
                 // Mosaic
-                FingerprintCanvas(contentHash: entry.contentHash, trimColor: trimColor)
+                FingerprintCanvas(contentHash: entry.contentHash, trimColor: trimColor, colorScheme: colorScheme)
                     .frame(height: 72)
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                     .padding(.horizontal, 10)
@@ -479,7 +503,12 @@ private struct QuickOpenCard: View {
             .overlay {
                 if isHighlighted {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5)
+                        .strokeBorder(
+                            colorScheme == .dark
+                                ? Color.white.opacity(0.14)
+                                : Color.black.opacity(0.10),
+                            lineWidth: 0.5
+                        )
                 }
             }
         }
@@ -495,13 +524,25 @@ private struct QuickOpenCard: View {
     private var cardBackground: some ShapeStyle {
         colorScheme == .dark
             ? Color.white.opacity(isHighlighted ? 0.06 : 0)
-            : Color.black.opacity(isHighlighted ? 0.05 : 0)
+            : Color.black.opacity(isHighlighted ? 0.06 : 0)
     }
 }
 
-// MARK: - Focused value for toggling quick open from commands
+// MARK: - Focused values for commands
 
 private struct QuickOpenActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+private struct ToggleViewModeActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+private struct TogglePinActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+private struct ToggleReaderWidthActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
@@ -510,10 +551,28 @@ extension FocusedValues {
         get { self[QuickOpenActionKey.self] }
         set { self[QuickOpenActionKey.self] = newValue }
     }
+
+    var toggleViewModeAction: (() -> Void)? {
+        get { self[ToggleViewModeActionKey.self] }
+        set { self[ToggleViewModeActionKey.self] = newValue }
+    }
+
+    var togglePinAction: (() -> Void)? {
+        get { self[TogglePinActionKey.self] }
+        set { self[TogglePinActionKey.self] = newValue }
+    }
+
+    var toggleReaderWidthAction: (() -> Void)? {
+        get { self[ToggleReaderWidthActionKey.self] }
+        set { self[ToggleReaderWidthActionKey.self] = newValue }
+    }
 }
 
 struct QuickOpenCommands: Commands {
     @FocusedValue(\.quickOpenAction) private var quickOpenAction
+    @FocusedValue(\.toggleViewModeAction) private var toggleViewModeAction
+    @FocusedValue(\.togglePinAction) private var togglePinAction
+    @FocusedValue(\.toggleReaderWidthAction) private var toggleReaderWidthAction
 
     var body: some Commands {
         CommandGroup(replacing: .printItem) {
@@ -522,6 +581,26 @@ struct QuickOpenCommands: Commands {
             }
             .keyboardShortcut("p", modifiers: .command)
             .disabled(quickOpenAction == nil)
+        }
+
+        CommandGroup(after: .toolbar) {
+            Button("Toggle Rendered/Raw") {
+                toggleViewModeAction?()
+            }
+            .keyboardShortcut("r", modifiers: .command)
+            .disabled(toggleViewModeAction == nil)
+
+            Button("Pin Window on Top") {
+                togglePinAction?()
+            }
+            .keyboardShortcut("p", modifiers: [.command, .shift])
+            .disabled(togglePinAction == nil)
+
+            Button("Toggle Reader Margins") {
+                toggleReaderWidthAction?()
+            }
+            .keyboardShortcut("m", modifiers: [.command, .shift])
+            .disabled(toggleReaderWidthAction == nil)
         }
     }
 }

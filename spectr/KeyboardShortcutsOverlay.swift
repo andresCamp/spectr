@@ -36,6 +36,9 @@ private let shortcutGroups: [ShortcutGroup] = [
         ShortcutEntry(modifiers: "", key: "E", label: "Inline Code"),
     ]),
     ShortcutGroup(title: "View", shortcuts: [
+        ShortcutEntry(modifiers: "", key: "R", label: "Toggle Rendered/Raw"),
+        ShortcutEntry(modifiers: "\u{21E7}", key: "P", label: "Pin Window on Top"),
+        ShortcutEntry(modifiers: "\u{21E7}", key: "M", label: "Toggle Reader Margins"),
         ShortcutEntry(modifiers: "", key: "+", label: "Increase Text Size"),
         ShortcutEntry(modifiers: "", key: "\u{2212}", label: "Decrease Text Size"),
         ShortcutEntry(modifiers: "", key: "0", label: "Reset Text Size"),
@@ -50,8 +53,11 @@ final class CommandHoldMonitor {
     var isShowingShortcuts = false
 
     private nonisolated(unsafe) var localMonitor: Any?
+    private nonisolated(unsafe) var keyDownMonitor: Any?
     private var holdTimer: Timer?
     private let holdDelay: TimeInterval = 0.6
+    /// Set when a chord (Cmd+key) fires; suppresses the guide until Cmd is fully released.
+    private var chordUsed = false
 
     init() {
         localMonitor = NSEvent.addLocalMonitorForEvents(
@@ -62,6 +68,15 @@ final class CommandHoldMonitor {
             }
             return event
         }
+
+        keyDownMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: .keyDown
+        ) { [weak self] event in
+            DispatchQueue.main.async {
+                self?.handleKeyDown(event)
+            }
+            return event
+        }
     }
 
     func tearDown() {
@@ -69,7 +84,22 @@ final class CommandHoldMonitor {
             NSEvent.removeMonitor(monitor)
             localMonitor = nil
         }
+        if let monitor = keyDownMonitor {
+            NSEvent.removeMonitor(monitor)
+            keyDownMonitor = nil
+        }
         holdTimer?.invalidate()
+    }
+
+    private func handleKeyDown(_ event: NSEvent) {
+        if event.modifierFlags.contains(.command) {
+            chordUsed = true
+            holdTimer?.invalidate()
+            holdTimer = nil
+            if isShowingShortcuts {
+                isShowingShortcuts = false
+            }
+        }
     }
 
     private func handleFlags(_ event: NSEvent) {
@@ -77,8 +107,17 @@ final class CommandHoldMonitor {
             && !event.modifierFlags.contains(.shift)
             && !event.modifierFlags.contains(.option)
             && !event.modifierFlags.contains(.control)
+        let noModifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty
 
-        if commandOnly {
+        if noModifiers {
+            // All modifiers released — reset chord state
+            chordUsed = false
+            holdTimer?.invalidate()
+            holdTimer = nil
+            if isShowingShortcuts {
+                isShowingShortcuts = false
+            }
+        } else if commandOnly && !chordUsed {
             holdTimer?.invalidate()
             holdTimer = Timer.scheduledTimer(withTimeInterval: holdDelay, repeats: false) { [weak self] _ in
                 DispatchQueue.main.async {
@@ -145,12 +184,23 @@ struct KeyboardShortcutsOverlay: View {
         .padding(24)
         .background {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .shadow(color: .black.opacity(0.25), radius: 30, y: 10)
+                .fill(colorScheme == .dark
+                    ? AnyShapeStyle(.ultraThinMaterial)
+                    : AnyShapeStyle(Color(white: 0.97)))
+                .shadow(
+                    color: .black.opacity(colorScheme == .dark ? 0.25 : 0.14),
+                    radius: colorScheme == .dark ? 30 : 24,
+                    y: 10
+                )
         }
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.white.opacity(colorScheme == .dark ? 0.1 : 0.2), lineWidth: 0.5)
+                .strokeBorder(
+                    colorScheme == .dark
+                        ? Color.white.opacity(0.1)
+                        : Color.black.opacity(0.08),
+                    lineWidth: 0.5
+                )
         }
     }
 }
@@ -159,13 +209,14 @@ struct KeyboardShortcutsOverlay: View {
 
 struct CommandHoldShortcutsModifier: ViewModifier {
     @State private var monitor = CommandHoldMonitor()
+    @Environment(\.colorScheme) private var colorScheme
 
     func body(content: Content) -> some View {
         content
             .overlay {
                 if monitor.isShowingShortcuts {
                     ZStack {
-                        Color.black.opacity(0.2)
+                        Color.black.opacity(colorScheme == .dark ? 0.2 : 0.12)
                             .ignoresSafeArea()
 
                         KeyboardShortcutsOverlay()

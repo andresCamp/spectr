@@ -18,7 +18,7 @@ struct SpectrApp: App {
                 document: file.$document
             )
         }
-        .windowToolbarStyle(.unifiedCompact)
+        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .commands {
             WelcomeCommands()
             QuickOpenCommands()

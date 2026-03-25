@@ -1,15 +1,19 @@
 import {
   Annotation,
+  type AnnotationType,
   Compartment,
   EditorSelection,
   EditorState,
   Prec,
+  type Range,
   StateField,
 } from "@codemirror/state";
 import {
   Decoration,
+  type DecorationSet,
   EditorView,
   ViewPlugin,
+  type ViewUpdate,
   WidgetType,
   drawSelection,
   highlightActiveLine,
@@ -30,9 +34,85 @@ import {
   indentLess,
   indentMore,
 } from "@codemirror/commands";
+import type { SyntaxNode, SyntaxNodeRef, Tree } from "@lezer/common";
 
-const fromSwiftAnnotation = Annotation.define();
-const autoAdvanceHorizontalRuleAnnotation = Annotation.define();
+// --- WebKit bridge types ---
+
+interface WebKitMessageHandler {
+  postMessage(body: unknown): void;
+}
+
+interface WebKitMessageHandlers {
+  [name: string]: WebKitMessageHandler | undefined;
+}
+
+interface EditorAPI {
+  setText(text: string): void;
+  getText(): string;
+  setMode(mode: string): void;
+  setTheme(theme: string): void;
+  setTextScale(scale: number | string): void;
+  setReaderWidth(enabled: boolean): void;
+  setFileInfo(path: string, lastModified: string): void;
+  scrollToTop(): void;
+  focus(): void;
+}
+
+declare global {
+  interface Window {
+    webkit?: { messageHandlers?: WebKitMessageHandlers };
+    editor: EditorAPI;
+  }
+}
+
+// --- Render artifacts type ---
+
+interface RenderArtifacts {
+  decorations: DecorationSet;
+  atomicRanges: DecorationSet;
+}
+
+// --- Checkbox widget config ---
+
+interface CheckboxConfig {
+  checked: boolean;
+  from: number;
+  to: number;
+  checkedText: string;
+  uncheckedText: string;
+}
+
+// --- Tile for fingerprint rendering ---
+
+interface FingerprintTile {
+  x: number;
+  y: number;
+  diag: number;
+  fillStyle: string;
+  reach: number; // stable per-tile disturbance reach, 0–1
+}
+
+// --- Table row info ---
+
+interface TableCell {
+  from: number;
+  to: number;
+}
+
+interface TableRowInfo {
+  from: number;
+  to: number;
+  lineFrom: number;
+  lineTo: number;
+  lineNumber: number;
+  isHeader: boolean;
+  cells: TableCell[];
+}
+
+// --- Annotations and compartments ---
+
+const fromSwiftAnnotation: AnnotationType<boolean> = Annotation.define<boolean>();
+const autoAdvanceHorizontalRuleAnnotation: AnnotationType<boolean> = Annotation.define<boolean>();
 const decorationCompartment = new Compartment();
 const themeCompartment = new Compartment();
 const modeClassCompartment = new Compartment();
@@ -41,7 +121,8 @@ const gutterCompartment = new Compartment();
 const activeLineCompartment = new Compartment();
 const scrollBehaviorCompartment = new Compartment();
 
-let currentMode = "rendered";
+let currentMode: "rendered" | "raw" = "rendered";
+let readerWidthEnabled = true;
 const customTaskPattern = /^(\s*)(\[\]|\[(?:x|X)\])(\s+)/;
 const bareDomainPattern = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:\/[^\s<]*)?/gi;
 const horizontalRulePattern = /^\s{0,3}(?:(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,})$/;
@@ -66,7 +147,7 @@ const maximumTextScale = 2;
 
 // --- Content fingerprint visualization ---
 
-function fnv1aHash(str) {
+function fnv1aHash(str: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < str.length; i++) {
     h ^= str.charCodeAt(i);
@@ -75,7 +156,7 @@ function fnv1aHash(str) {
   return h >>> 0;
 }
 
-function mulberry32(seed) {
+function mulberry32(seed: number): () => number {
   return function () {
     seed |= 0;
     seed = (seed + 0x6d2b79f5) | 0;
@@ -85,7 +166,7 @@ function mulberry32(seed) {
   };
 }
 
-function parseHexColor(hex) {
+function parseHexColor(hex: string): { r: number; g: number; b: number } {
   hex = hex.trim().replace("#", "");
   return {
     r: parseInt(hex.substring(0, 2), 16),
@@ -94,9 +175,207 @@ function parseHexColor(hex) {
   };
 }
 
-let activeFingerprintAnimation = null;
+let activeFingerprintAnimation: number | null = null;
+let lastFingerprintTiles: FingerprintTile[] = [];
+let lastFingerprintParams: { w: number; h: number; tileSize: number; step: number; fadeH: number } | null = null;
 
-function drawContentFingerprint(canvas, text, animate) {
+// Idle twinkle
+let twinkleRunning = false;
+let twinkleCanvas: HTMLCanvasElement | null = null;
+
+function startTwinkle(): void {
+  if (twinkleRunning) return;
+  twinkleRunning = true;
+  requestAnimationFrame(twinkleTick);
+}
+
+function stopTwinkle(): void {
+  twinkleRunning = false;
+}
+
+function twinkleTick(now: number): void {
+  if (!twinkleRunning) return;
+  const canvas = twinkleCanvas;
+  const tiles = lastFingerprintTiles;
+  const params = lastFingerprintParams;
+  if (!canvas || !tiles.length || !params) {
+    twinkleRunning = false;
+    return;
+  }
+
+  // Skip if entropy animation is running — it redraws the canvas already
+  if (entropyAnimationRunning) {
+    requestAnimationFrame(twinkleTick);
+    return;
+  }
+
+  const { w, h, tileSize, fadeH } = params;
+  const dpr = globalThis.devicePixelRatio || 1;
+  const ctx = canvas.getContext("2d")!;
+
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const t = now * 0.001; // seconds
+
+  for (let i = 0; i < tiles.length; i++) {
+    const tile = tiles[i];
+    // Each tile has a unique phase from its reach + position
+    const phase = tile.reach * Math.PI * 2 + tile.diag * 0.7;
+    // Subtle shimmer: ±6% opacity modulation using layered sine waves
+    const shimmer = Math.sin(t * 0.8 + phase) * 0.03
+                  + Math.sin(t * 1.3 + phase * 1.7) * 0.03;
+    ctx.globalAlpha = Math.max(0, Math.min(1, 1 + shimmer));
+    ctx.fillStyle = tile.fillStyle;
+    ctx.fillRect(tile.x, tile.y, tileSize, tileSize);
+  }
+
+  ctx.globalAlpha = 1;
+  const fadeGrad = ctx.createLinearGradient(0, h - fadeH, 0, h);
+  fadeGrad.addColorStop(0, "rgba(0,0,0,0)");
+  fadeGrad.addColorStop(1, "rgba(0,0,0,1)");
+  ctx.globalCompositeOperation = "destination-out";
+  ctx.fillStyle = fadeGrad;
+  ctx.fillRect(0, h - fadeH, w, fadeH);
+  ctx.globalCompositeOperation = "source-over";
+
+  ctx.restore();
+  requestAnimationFrame(twinkleTick);
+}
+
+// Hover entropy trail — each disturbed tile gets a random fill that decays back
+interface TileDisturbance {
+  index: number;
+  randomFill: string;
+  startTime: number;
+}
+
+const activeDisturbances: Map<number, TileDisturbance> = new Map();
+let entropyAnimationRunning = false;
+let entropyCanvas: HTMLCanvasElement | null = null;
+const DISTURB_RADIUS_MIN = 30;
+const DISTURB_RADIUS_MAX = 72;
+const DISTURB_DURATION = 1500;
+
+function generateRandomTileFill(): string {
+  const isDark = document.documentElement.dataset.theme === "dark";
+  const trimHex = getComputedStyle(document.documentElement)
+    .getPropertyValue("--trim-color").trim();
+  const { r, g, b } = parseHexColor(trimHex || "#e3bd96");
+
+  const v = Math.random();
+  if (v < 0.4) {
+    const opacity = isDark ? 0.2 + Math.random() * 0.45 : 0.15 + Math.random() * 0.35;
+    return `rgba(${r}, ${g}, ${b}, ${opacity})`;
+  } else if (v < 0.7) {
+    const opacity = isDark ? 0.08 + Math.random() * 0.18 : 0.06 + Math.random() * 0.14;
+    return isDark
+      ? `rgba(255, 255, 255, ${opacity})`
+      : `rgba(0, 0, 0, ${opacity})`;
+  } else {
+    return "rgba(0,0,0,0)";
+  }
+}
+
+function disturbTilesNear(x: number, y: number): void {
+  const tiles = lastFingerprintTiles;
+  const params = lastFingerprintParams;
+  if (!tiles.length || !params) return;
+
+  const now = performance.now();
+  const { tileSize } = params;
+  const half = tileSize / 2;
+
+  for (let i = 0; i < tiles.length; i++) {
+    const tile = tiles[i];
+    const dx = (tile.x + half) - x;
+    const dy = (tile.y + half) - y;
+    const threshold = DISTURB_RADIUS_MIN + tile.reach * (DISTURB_RADIUS_MAX - DISTURB_RADIUS_MIN);
+    if (dx * dx + dy * dy < threshold * threshold) {
+      if (!activeDisturbances.has(i)) {
+        activeDisturbances.set(i, {
+          index: i,
+          randomFill: generateRandomTileFill(),
+          startTime: now,
+        });
+      }
+    }
+  }
+
+  if (!entropyAnimationRunning && activeDisturbances.size > 0) {
+    entropyAnimationRunning = true;
+    requestAnimationFrame(renderEntropyFrame);
+  }
+}
+
+function renderEntropyFrame(now: number): void {
+  const canvas = entropyCanvas;
+  const tiles = lastFingerprintTiles;
+  const params = lastFingerprintParams;
+  if (!canvas || !tiles.length || !params) {
+    entropyAnimationRunning = false;
+    return;
+  }
+
+  const { w, h, tileSize, fadeH } = params;
+  const dpr = globalThis.devicePixelRatio || 1;
+  const ctx = canvas.getContext("2d")!;
+
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  for (let i = 0; i < tiles.length; i++) {
+    const tile = tiles[i];
+    const disturbance = activeDisturbances.get(i);
+
+    if (disturbance) {
+      const elapsed = now - disturbance.startTime;
+      const t = Math.min(1, elapsed / DISTURB_DURATION);
+
+      if (t >= 1) {
+        activeDisturbances.delete(i);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = tile.fillStyle;
+        ctx.fillRect(tile.x, tile.y, tileSize, tileSize);
+      } else {
+        // Draw the original tile first
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = tile.fillStyle;
+        ctx.fillRect(tile.x, tile.y, tileSize, tileSize);
+        // Overlay the random color, fading out over time
+        const blend = 1 - t * t; // starts at 1, decays to 0
+        ctx.globalAlpha = blend;
+        ctx.fillStyle = disturbance.randomFill;
+        ctx.fillRect(tile.x, tile.y, tileSize, tileSize);
+      }
+    } else {
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = tile.fillStyle;
+      ctx.fillRect(tile.x, tile.y, tileSize, tileSize);
+    }
+  }
+
+  // Fade bottom edge
+  ctx.globalAlpha = 1;
+  const fadeGrad = ctx.createLinearGradient(0, h - fadeH, 0, h);
+  fadeGrad.addColorStop(0, "rgba(0,0,0,0)");
+  fadeGrad.addColorStop(1, "rgba(0,0,0,1)");
+  ctx.globalCompositeOperation = "destination-out";
+  ctx.fillStyle = fadeGrad;
+  ctx.fillRect(0, h - fadeH, w, fadeH);
+  ctx.globalCompositeOperation = "source-over";
+  ctx.restore();
+
+  if (activeDisturbances.size > 0) {
+    requestAnimationFrame(renderEntropyFrame);
+  } else {
+    entropyAnimationRunning = false;
+  }
+}
+
+function drawContentFingerprint(canvas: HTMLCanvasElement, text: string, animate: boolean): void {
   // Cancel any running animation
   if (activeFingerprintAnimation) {
     cancelAnimationFrame(activeFingerprintAnimation);
@@ -114,7 +393,7 @@ function drawContentFingerprint(canvas, text, animate) {
   canvas.width = w * dpr;
   canvas.height = h * dpr;
 
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d")!;
   ctx.scale(dpr, dpr);
 
   const trimHex = getComputedStyle(document.documentElement)
@@ -130,7 +409,7 @@ function drawContentFingerprint(canvas, text, animate) {
   const cols = Math.ceil(w / step);
   const rows = Math.ceil(h / step);
   const maxDiag = cols + rows - 2;
-  const tiles = [];
+  const tiles: FingerprintTile[] = [];
 
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
@@ -140,19 +419,25 @@ function drawContentFingerprint(canvas, text, animate) {
         continue;
       }
 
-      let fillStyle;
-      if (v < 0.65) {
-        const opacity = isDark
-          ? 0.15 + rng() * 0.35
-          : 0.12 + rng() * 0.30;
-        fillStyle = `rgba(${r}, ${g}, ${b}, ${opacity})`;
+      let fillStyle: string;
+      if (isDark) {
+        // Dark mode: light trim color + white accents over dark bg
+        if (v < 0.65) {
+          const opacity = 0.15 + rng() * 0.35;
+          fillStyle = `rgba(${r}, ${g}, ${b}, ${opacity})`;
+        } else {
+          const opacity = 0.06 + rng() * 0.12;
+          fillStyle = `rgba(255, 255, 255, ${opacity})`;
+        }
       } else {
-        const opacity = isDark
-          ? 0.06 + rng() * 0.12
-          : 0.04 + rng() * 0.10;
-        fillStyle = isDark
-          ? `rgba(255, 255, 255, ${opacity})`
-          : `rgba(0, 0, 0, ${opacity})`;
+        // Light mode: trim color is now dark enough to read against beige
+        if (v < 0.65) {
+          const opacity = 0.15 + rng() * 0.35;
+          fillStyle = `rgba(${r}, ${g}, ${b}, ${opacity})`;
+        } else {
+          const opacity = 0.06 + rng() * 0.12;
+          fillStyle = `rgba(0, 0, 0, ${opacity})`;
+        }
       }
 
       tiles.push({
@@ -160,13 +445,14 @@ function drawContentFingerprint(canvas, text, animate) {
         y: row * step,
         diag: col + row,
         fillStyle,
+        reach: rng(),
       });
     }
   }
 
   const fadeH = 24;
 
-  function renderFrame(progress) {
+  function renderFrame(progress: number): void {
     ctx.clearRect(0, 0, w, h);
 
     for (const tile of tiles) {
@@ -192,15 +478,20 @@ function drawContentFingerprint(canvas, text, animate) {
     ctx.globalCompositeOperation = "source-over";
   }
 
+  // Store for hover scramble
+  lastFingerprintTiles = tiles;
+  lastFingerprintParams = { w, h, tileSize, step, fadeH };
+
   if (!animate) {
     renderFrame(1);
+    startTwinkle();
     return;
   }
 
   const duration = 600;
   const start = performance.now();
 
-  function tick(now) {
+  function tick(now: number): void {
     const elapsed = now - start;
     const t = Math.min(1, elapsed / duration);
     // Ease out cubic
@@ -210,17 +501,51 @@ function drawContentFingerprint(canvas, text, animate) {
       activeFingerprintAnimation = requestAnimationFrame(tick);
     } else {
       activeFingerprintAnimation = null;
+      startTwinkle();
     }
   }
 
   activeFingerprintAnimation = requestAnimationFrame(tick);
 }
 
-let documentHeaderInstance = null;
+// --- Content fingerprint plugin instance ---
+
+interface DocumentHeaderPlugin {
+  header: HTMLDivElement;
+  canvas: HTMLCanvasElement;
+  meta: HTMLDivElement;
+  dateEl: HTMLSpanElement;
+  dateLabelEl: HTMLSpanElement;
+  dateValueEl: HTMLSpanElement;
+  pathEl: HTMLSpanElement;
+  pathLabelEl: HTMLSpanElement;
+  pathValueEl: HTMLSpanElement;
+  debounceTimer: ReturnType<typeof setTimeout> | null;
+  hasDrawn: boolean;
+  resizeObserver: ResizeObserver;
+  draw(text: string, animate: boolean): void;
+  setFileInfo(path: string, lastModified: string): void;
+  destroy(): void;
+}
+
+let documentHeaderInstance: DocumentHeaderPlugin | null = null;
 
 const contentFingerprintPlugin = ViewPlugin.fromClass(
-  class {
-    constructor(view) {
+  class implements DocumentHeaderPlugin {
+    header: HTMLDivElement;
+    canvas: HTMLCanvasElement;
+    meta: HTMLDivElement;
+    dateEl: HTMLSpanElement;
+    dateLabelEl: HTMLSpanElement;
+    dateValueEl: HTMLSpanElement;
+    pathEl: HTMLSpanElement;
+    pathLabelEl: HTMLSpanElement;
+    pathValueEl: HTMLSpanElement;
+    debounceTimer: ReturnType<typeof setTimeout> | null;
+    hasDrawn: boolean;
+    resizeObserver: ResizeObserver;
+
+    constructor(view: EditorView) {
       this.header = document.createElement("div");
       this.header.className = "cm-document-header";
 
@@ -243,7 +568,7 @@ const contentFingerprintPlugin = ViewPlugin.fromClass(
       this.meta.appendChild(this.dateEl);
 
       this.pathEl = document.createElement("span");
-      this.pathEl.className = "cm-document-meta-item";
+      this.pathEl.className = "cm-document-meta-item cm-document-meta-copyable";
       this.pathLabelEl = document.createElement("span");
       this.pathLabelEl.className = "cm-document-meta-label";
       this.pathLabelEl.textContent = "Path";
@@ -252,10 +577,27 @@ const contentFingerprintPlugin = ViewPlugin.fromClass(
       this.pathEl.appendChild(this.pathValueEl);
       this.meta.appendChild(this.pathEl);
 
+      this.pathEl.addEventListener("click", () => {
+        const text = this.pathValueEl.textContent;
+        if (!text) return;
+        navigator.clipboard.writeText(text).then(() => {
+          this.pathEl.classList.add("cm-meta-copied");
+          setTimeout(() => this.pathEl.classList.remove("cm-meta-copied"), 1500);
+        });
+      });
+
       this.debounceTimer = null;
       this.hasDrawn = false;
 
       view.scrollDOM.insertBefore(this.header, view.scrollDOM.firstChild);
+
+      entropyCanvas = this.canvas;
+      twinkleCanvas = this.canvas;
+      this.canvas.addEventListener("mousemove", (e: MouseEvent) => {
+        if (this.hasDrawn) {
+          disturbTilesNear(e.offsetX, e.offsetY);
+        }
+      });
 
       this.resizeObserver = new ResizeObserver(() => {
         const animate = !this.hasDrawn;
@@ -267,25 +609,26 @@ const contentFingerprintPlugin = ViewPlugin.fromClass(
       documentHeaderInstance = this;
     }
 
-    update(update) {
+    update(update: ViewUpdate): void {
       if (update.docChanged) {
-        clearTimeout(this.debounceTimer);
+        if (this.debounceTimer !== null) clearTimeout(this.debounceTimer);
         const text = update.state.doc.toString();
         this.debounceTimer = setTimeout(() => this.draw(text, false), 800);
       }
     }
 
-    draw(text, animate) {
+    draw(text: string, animate: boolean): void {
       drawContentFingerprint(this.canvas, text, animate);
     }
 
-    setFileInfo(path, lastModified) {
+    setFileInfo(path: string, lastModified: string): void {
       this.pathValueEl.textContent = path || "";
       this.dateValueEl.textContent = lastModified || "";
     }
 
-    destroy() {
-      clearTimeout(this.debounceTimer);
+    destroy(): void {
+      if (this.debounceTimer !== null) clearTimeout(this.debounceTimer);
+      stopTwinkle();
       this.resizeObserver.disconnect();
       this.header.remove();
       if (documentHeaderInstance === this) {
@@ -297,15 +640,15 @@ const contentFingerprintPlugin = ViewPlugin.fromClass(
 
 // --- End content fingerprint ---
 
-function safePostMessage(name, body) {
-  const handler = globalThis.webkit?.messageHandlers?.[name];
+function safePostMessage(name: string, body: unknown): void {
+  const handler = (globalThis as unknown as Window).webkit?.messageHandlers?.[name];
   if (!handler) {
     return;
   }
   handler.postMessage(body);
 }
 
-function reportError(message, extra = {}) {
+function reportError(message: string, extra: Record<string, unknown> = {}): void {
   console.error("[Spectr Editor]", message, extra);
   safePostMessage("editorError", {
     message,
@@ -313,7 +656,7 @@ function reportError(message, extra = {}) {
   });
 }
 
-globalThis.addEventListener("error", (event) => {
+globalThis.addEventListener("error", (event: ErrorEvent) => {
   reportError(event.message || "Unhandled editor error", {
     filename: event.filename ?? null,
     line: event.lineno ?? null,
@@ -321,25 +664,25 @@ globalThis.addEventListener("error", (event) => {
   });
 });
 
-globalThis.addEventListener("unhandledrejection", (event) => {
+globalThis.addEventListener("unhandledrejection", (event: PromiseRejectionEvent) => {
   reportError("Unhandled promise rejection", {
     reason: String(event.reason),
   });
 });
 
-function emptyRenderArtifacts() {
+function emptyRenderArtifacts(): RenderArtifacts {
   return {
     decorations: Decoration.none,
     atomicRanges: Decoration.none,
   };
 }
 
-function createAtomicRange(from, to) {
+function createAtomicRange(from: number, to: number): Range<Decoration> {
   return Decoration.mark({ class: "cm-hidden-syntax" }).range(from, to);
 }
 
-function buildRenderedArtifactsField() {
-  return StateField.define({
+function buildRenderedArtifactsField(): StateField<RenderArtifacts> {
+  return StateField.define<RenderArtifacts>({
     create(state) {
       return buildRenderArtifacts(state);
     },
@@ -358,15 +701,15 @@ function buildRenderedArtifactsField() {
   });
 }
 
-function buildRenderArtifacts(state) {
-  const decorations = [];
-  const atomicRanges = [];
-  const standardTaskLines = new Set();
-  const renderedListLines = new Set();
+function buildRenderArtifacts(state: EditorState): RenderArtifacts {
+  const decorations: Range<Decoration>[] = [];
+  const atomicRanges: Range<Decoration>[] = [];
+  const standardTaskLines = new Set<number>();
+  const renderedListLines = new Set<number>();
   const tree = syntaxTree(state);
 
   tree.iterate({
-    enter(node) {
+    enter(node: SyntaxNodeRef) {
       switch (node.name) {
         case "ATXHeading1":
         case "ATXHeading2":
@@ -428,11 +771,11 @@ function buildRenderArtifacts(state) {
   };
 }
 
-function clamp(value, min, max) {
+function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-function getWheelLineUnits(event, view) {
+function getWheelLineUnits(event: WheelEvent, view: EditorView): number {
   const lineHeight = Math.max(1, view.defaultLineHeight || 1);
 
   switch (event.deltaMode) {
@@ -445,7 +788,7 @@ function getWheelLineUnits(event, view) {
   }
 }
 
-function scrollRawViewByLines(view, lineDelta) {
+function scrollRawViewByLines(view: EditorView, lineDelta: number): boolean {
   if (!lineDelta) {
     return false;
   }
@@ -467,7 +810,7 @@ function scrollRawViewByLines(view, lineDelta) {
   return true;
 }
 
-function getTopLineNumber(view) {
+function getTopLineNumber(view: EditorView): number {
   const rect = view.contentDOM.getBoundingClientRect();
   const scrollerRect = view.scrollDOM.getBoundingClientRect();
   const docY = scrollerRect.top - rect.top;
@@ -475,7 +818,7 @@ function getTopLineNumber(view) {
   return view.state.doc.lineAt(block.from).number;
 }
 
-function scrollToLineNumber(view, lineNum) {
+function scrollToLineNumber(view: EditorView, lineNum: number): void {
   const clamped = clamp(lineNum, 1, view.state.doc.lines);
   const line = view.state.doc.line(clamped);
   view.dispatch({
@@ -483,7 +826,13 @@ function scrollToLineNumber(view, lineNum) {
   });
 }
 
-function addReplacement(decorations, atomicRanges, from, to, spec = {}) {
+function addReplacement(
+  decorations: Range<Decoration>[],
+  atomicRanges: Range<Decoration>[],
+  from: number,
+  to: number,
+  spec: Record<string, unknown> = {},
+): void {
   if (from >= to) {
     return;
   }
@@ -491,7 +840,13 @@ function addReplacement(decorations, atomicRanges, from, to, spec = {}) {
   atomicRanges.push(createAtomicRange(from, to));
 }
 
-function addMark(decorations, from, to, className, attributes) {
+function addMark(
+  decorations: Range<Decoration>[],
+  from: number,
+  to: number,
+  className: string,
+  attributes?: Record<string, string>,
+): void {
   if (from >= to) {
     return;
   }
@@ -503,11 +858,16 @@ function addMark(decorations, from, to, className, attributes) {
   );
 }
 
-function addLineClass(decorations, from, className) {
+function addLineClass(decorations: Range<Decoration>[], from: number, className: string): void {
   decorations.push(Decoration.line({ class: className }).range(from));
 }
 
-function decorateHeading(decorations, atomicRanges, node, state) {
+function decorateHeading(
+  decorations: Range<Decoration>[],
+  atomicRanges: Range<Decoration>[],
+  node: SyntaxNodeRef,
+  state: EditorState,
+): void {
   const line = state.doc.lineAt(node.from);
   const text = line.text;
   const match = /^(#{1,6})(\s+)(.*?)(\s+#+\s*)?$/.exec(text);
@@ -528,7 +888,12 @@ function decorateHeading(decorations, atomicRanges, node, state) {
   addLineClass(decorations, line.from, `cm-heading-${level}`);
 }
 
-function decorateStrongEmphasis(decorations, atomicRanges, node, state) {
+function decorateStrongEmphasis(
+  decorations: Range<Decoration>[],
+  atomicRanges: Range<Decoration>[],
+  node: SyntaxNodeRef,
+  state: EditorState,
+): void {
   const text = state.sliceDoc(node.from, node.to);
   const match = /^(\*\*|__)([\s\S]*)(\*\*|__)$/.exec(text);
   if (!match || match[1] !== match[3]) {
@@ -556,7 +921,12 @@ function decorateStrongEmphasis(decorations, atomicRanges, node, state) {
   );
 }
 
-function decorateEmphasis(decorations, atomicRanges, node, state) {
+function decorateEmphasis(
+  decorations: Range<Decoration>[],
+  atomicRanges: Range<Decoration>[],
+  node: SyntaxNodeRef,
+  state: EditorState,
+): void {
   const text = state.sliceDoc(node.from, node.to);
   const delimiter = text[0];
   if (!delimiter || delimiter !== text[text.length - 1] || !["*", "_"].includes(delimiter)) {
@@ -568,7 +938,12 @@ function decorateEmphasis(decorations, atomicRanges, node, state) {
   addReplacement(decorations, atomicRanges, node.to - 1, node.to);
 }
 
-function decorateInlineCode(decorations, atomicRanges, node, state) {
+function decorateInlineCode(
+  decorations: Range<Decoration>[],
+  atomicRanges: Range<Decoration>[],
+  node: SyntaxNodeRef,
+  state: EditorState,
+): void {
   const text = state.sliceDoc(node.from, node.to);
   const match = /^(`+)([\s\S]*)(`+)$/.exec(text);
   if (!match || match[1] !== match[3]) {
@@ -596,7 +971,12 @@ function decorateInlineCode(decorations, atomicRanges, node, state) {
   );
 }
 
-function decorateLink(decorations, atomicRanges, node, state) {
+function decorateLink(
+  decorations: Range<Decoration>[],
+  atomicRanges: Range<Decoration>[],
+  node: SyntaxNodeRef,
+  state: EditorState,
+): void {
   const text = state.sliceDoc(node.from, node.to);
   const match = /^\[([\s\S]+)\]\(([\s\S]+)\)$/.exec(text);
   if (!match) {
@@ -616,7 +996,11 @@ function decorateLink(decorations, atomicRanges, node, state) {
   addReplacement(decorations, atomicRanges, contentEnd, node.to);
 }
 
-function decorateUrl(decorations, node, state) {
+function decorateUrl(
+  decorations: Range<Decoration>[],
+  node: SyntaxNodeRef,
+  state: EditorState,
+): void {
   if (hasAncestorNamed(node, "Link")) {
     return;
   }
@@ -628,7 +1012,11 @@ function decorateUrl(decorations, node, state) {
   });
 }
 
-function decorateBareDomains(decorations, state, tree) {
+function decorateBareDomains(
+  decorations: Range<Decoration>[],
+  state: EditorState,
+  tree: Tree,
+): void {
   for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
     const line = state.doc.line(lineNumber);
     bareDomainPattern.lastIndex = 0;
@@ -638,9 +1026,9 @@ function decorateBareDomains(decorations, state, tree) {
         continue;
       }
 
-      const matchStart = line.from + match.index;
+      const matchStart = line.from + match.index!;
       const matchEnd = matchStart + matchedText.length;
-      if (!isBareDomainRenderable(tree, matchStart, matchEnd, line.text, match.index, matchedText.length)) {
+      if (!isBareDomainRenderable(tree, matchStart, matchEnd, line.text, match.index!)) {
         continue;
       }
 
@@ -652,7 +1040,7 @@ function decorateBareDomains(decorations, state, tree) {
   }
 }
 
-function normalizeLinkTarget(text) {
+function normalizeLinkTarget(text: string): string {
   if (/^[a-z][a-z0-9+.-]*:/i.test(text)) {
     return text;
   }
@@ -664,11 +1052,17 @@ function normalizeLinkTarget(text) {
   return `https://${text}`;
 }
 
-function trimDetectedDomain(text) {
+function trimDetectedDomain(text: string): string {
   return text.replace(/[),.;:!?]+$/g, "");
 }
 
-function isBareDomainRenderable(tree, from, to, lineText, matchIndex) {
+function isBareDomainRenderable(
+  tree: Tree,
+  from: number,
+  to: number,
+  lineText: string,
+  matchIndex: number,
+): boolean {
   if (matchIndex > 0) {
     const before = lineText[matchIndex - 1];
     if (before === "@" || before === "/" || before === ":") {
@@ -685,8 +1079,8 @@ function isBareDomainRenderable(tree, from, to, lineText, matchIndex) {
   return true;
 }
 
-function hasLinkishContext(tree, position) {
-  for (let node = tree.resolveInner(position, 1); node; node = node.parent) {
+function hasLinkishContext(tree: Tree, position: number): boolean {
+  for (let node: SyntaxNode | null = tree.resolveInner(position, 1); node; node = node.parent) {
     if (node.name === "Link" || node.name === "URL" || node.name === "Autolink") {
       return true;
     }
@@ -694,8 +1088,8 @@ function hasLinkishContext(tree, position) {
   return false;
 }
 
-function hasAncestorNamed(node, name) {
-  for (let current = node.node.parent; current; current = current.parent) {
+function hasAncestorNamed(node: SyntaxNodeRef, name: string): boolean {
+  for (let current: SyntaxNode | null = node.node.parent; current; current = current.parent) {
     if (current.name === name) {
       return true;
     }
@@ -704,13 +1098,13 @@ function hasAncestorNamed(node, name) {
 }
 
 function decorateListItem(
-  decorations,
-  atomicRanges,
-  node,
-  state,
-  standardTaskLines,
-  renderedListLines,
-) {
+  decorations: Range<Decoration>[],
+  atomicRanges: Range<Decoration>[],
+  node: SyntaxNodeRef,
+  state: EditorState,
+  standardTaskLines: Set<number>,
+  renderedListLines: Set<number>,
+): void {
   const listItem = node.node;
   const listMark = listItem.getChild("ListMark");
   if (!listMark) {
@@ -775,12 +1169,12 @@ function decorateListItem(
 }
 
 function decorateBareTaskLines(
-  decorations,
-  atomicRanges,
-  state,
-  tree,
-  standardTaskLines,
-) {
+  decorations: Range<Decoration>[],
+  atomicRanges: Range<Decoration>[],
+  state: EditorState,
+  tree: Tree,
+  standardTaskLines: Set<number>,
+): void {
   for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
     const line = state.doc.line(lineNumber);
     if (standardTaskLines.has(line.from)) {
@@ -824,12 +1218,12 @@ function decorateBareTaskLines(
 }
 
 function decoratePendingListLines(
-  decorations,
-  atomicRanges,
-  state,
-  tree,
-  renderedListLines,
-) {
+  decorations: Range<Decoration>[],
+  atomicRanges: Range<Decoration>[],
+  state: EditorState,
+  tree: Tree,
+  renderedListLines: Set<number>,
+): void {
   for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
     const line = state.doc.line(lineNumber);
     if (renderedListLines.has(line.from)) {
@@ -856,12 +1250,12 @@ function decoratePendingListLines(
   }
 }
 
-function isBareTaskRenderableLine(tree, position) {
+function isBareTaskRenderableLine(tree: Tree, position: number): boolean {
   return !hasBlockedLineWidgetContext(tree, position);
 }
 
-function hasBlockedLineWidgetContext(tree, position) {
-  for (let node = tree.resolveInner(position, 1); node; node = node.parent) {
+function hasBlockedLineWidgetContext(tree: Tree, position: number): boolean {
+  for (let node: SyntaxNode | null = tree.resolveInner(position, 1); node; node = node.parent) {
     if (blockedLineWidgetContexts.has(node.name)) {
       return true;
     }
@@ -869,7 +1263,12 @@ function hasBlockedLineWidgetContext(tree, position) {
   return false;
 }
 
-function decorateBlockquote(decorations, atomicRanges, node, state) {
+function decorateBlockquote(
+  decorations: Range<Decoration>[],
+  atomicRanges: Range<Decoration>[],
+  node: SyntaxNodeRef,
+  state: EditorState,
+): void {
   const startLine = state.doc.lineAt(node.from).number;
   const endLine = state.doc.lineAt(node.to).number;
 
@@ -888,7 +1287,12 @@ function decorateBlockquote(decorations, atomicRanges, node, state) {
   }
 }
 
-function decorateFencedCode(decorations, atomicRanges, node, state) {
+function decorateFencedCode(
+  decorations: Range<Decoration>[],
+  atomicRanges: Range<Decoration>[],
+  node: SyntaxNodeRef,
+  state: EditorState,
+): void {
   const firstLine = state.doc.lineAt(node.from);
   const lastLine = state.doc.lineAt(node.to);
 
@@ -914,16 +1318,21 @@ function decorateFencedCode(decorations, atomicRanges, node, state) {
   }
 }
 
-function decorateTable(decorations, atomicRanges, node, state) {
+function decorateTable(
+  decorations: Range<Decoration>[],
+  atomicRanges: Range<Decoration>[],
+  node: SyntaxNodeRef,
+  state: EditorState,
+): void {
   // Collect column alignments and delimiter row position from tree children.
-  const alignments = [];
+  const alignments: string[] = [];
   let delimiterRowFrom = -1;
   let delimiterRowTo = -1;
   let columnCount = 0;
-  const rows = []; // { from, to, lineNumber, isHeader, cells: [{ from, to }] }
+  const rows: TableRowInfo[] = [];
 
   // First pass: walk direct children to gather structure.
-  let child = node.node.firstChild;
+  let child: SyntaxNode | null = node.node.firstChild;
   while (child) {
     if (child.name === "TableDelimiter" && child.from !== child.parent?.firstChild?.from) {
       // This is the separator row (not an inline pipe delimiter).
@@ -934,7 +1343,7 @@ function decorateTable(decorations, atomicRanges, node, state) {
         delimiterRowTo = line.to;
         // Parse alignment from separator content.
         const sepText = state.doc.sliceString(child.from, child.to);
-        const sepCells = sepText.split("|").filter(s => s.trim().length > 0);
+        const sepCells = sepText.split("|").filter((s: string) => s.trim().length > 0);
         for (const cell of sepCells) {
           const trimmed = cell.trim();
           const left = trimmed.startsWith(":");
@@ -949,8 +1358,8 @@ function decorateTable(decorations, atomicRanges, node, state) {
         }
       }
     } else if (child.name === "TableHeader" || child.name === "TableRow") {
-      const cells = [];
-      let cellChild = child.firstChild;
+      const cells: TableCell[] = [];
+      let cellChild: SyntaxNode | null = child.firstChild;
       while (cellChild) {
         if (cellChild.name === "TableCell") {
           cells.push({ from: cellChild.from, to: cellChild.to });
@@ -995,6 +1404,7 @@ function decorateTable(decorations, atomicRanges, node, state) {
   for (const row of rows) {
     const line = state.doc.line(row.lineNumber);
     const isLastRow = row.lineNumber === lastRowLineNumber && !row.isHeader;
+
     const classes = ["cm-table-line"];
     classes.push(row.isHeader ? "cm-table-header" : "cm-table-row");
     if (isLastRow) {
@@ -1067,18 +1477,23 @@ function decorateTable(decorations, atomicRanges, node, state) {
 }
 
 class TableCellSeparatorWidget extends WidgetType {
-  eq() {
+  eq(): boolean {
     return true;
   }
 
-  toDOM() {
+  toDOM(): HTMLElement {
     const element = document.createElement("span");
     element.className = "cm-table-cell-sep";
     return element;
   }
 }
 
-function decorateHorizontalRule(decorations, atomicRanges, node, state) {
+function decorateHorizontalRule(
+  decorations: Range<Decoration>[],
+  atomicRanges: Range<Decoration>[],
+  node: SyntaxNodeRef,
+  state: EditorState,
+): void {
   const active = isCursorOnSyntaxNode(state, node);
   if (active) {
     addLineClass(decorations, node.from, "cm-horizontal-rule-active-line");
@@ -1097,17 +1512,20 @@ function decorateHorizontalRule(decorations, atomicRanges, node, state) {
 }
 
 class ListMarkerWidget extends WidgetType {
-  constructor(marker) {
+  marker: string;
+  ordered: boolean;
+
+  constructor(marker: string) {
     super();
     this.marker = marker;
     this.ordered = /^\d/.test(marker);
   }
 
-  eq(other) {
+  eq(other: ListMarkerWidget): boolean {
     return other.marker === this.marker;
   }
 
-  toDOM() {
+  toDOM(): HTMLElement {
     const element = document.createElement("span");
     element.className = this.ordered
       ? "cm-list-marker cm-list-marker-ordered"
@@ -1125,7 +1543,13 @@ class ListMarkerWidget extends WidgetType {
 }
 
 class CheckboxWidget extends WidgetType {
-  constructor({ checked, from, to, checkedText, uncheckedText }) {
+  checked: boolean;
+  from: number;
+  to: number;
+  checkedText: string;
+  uncheckedText: string;
+
+  constructor({ checked, from, to, checkedText, uncheckedText }: CheckboxConfig) {
     super();
     this.checked = checked;
     this.from = from;
@@ -1134,7 +1558,7 @@ class CheckboxWidget extends WidgetType {
     this.uncheckedText = uncheckedText;
   }
 
-  eq(other) {
+  eq(other: CheckboxWidget): boolean {
     return (
       other.checked === this.checked &&
       other.from === this.from &&
@@ -1144,11 +1568,11 @@ class CheckboxWidget extends WidgetType {
     );
   }
 
-  ignoreEvent() {
+  ignoreEvent(): boolean {
     return false;
   }
 
-  toDOM(view) {
+  toDOM(view: EditorView): HTMLElement {
     const input = document.createElement("input");
     input.type = "checkbox";
     input.checked = this.checked;
@@ -1175,16 +1599,18 @@ class CheckboxWidget extends WidgetType {
 }
 
 class HorizontalRuleWidget extends WidgetType {
+  active: boolean;
+
   constructor(active = false) {
     super();
     this.active = active;
   }
 
-  eq(other) {
+  eq(other: HorizontalRuleWidget): boolean {
     return other.active === this.active;
   }
 
-  toDOM() {
+  toDOM(): HTMLElement {
     const hr = document.createElement("hr");
     hr.className = this.active
       ? "cm-horizontal-rule cm-horizontal-rule-active"
@@ -1193,7 +1619,7 @@ class HorizontalRuleWidget extends WidgetType {
   }
 }
 
-function isCursorOnSyntaxNode(state, node) {
+function isCursorOnSyntaxNode(state: EditorState, node: SyntaxNodeRef): boolean {
   const selection = state.selection.main;
   return (
     selection.empty &&
@@ -1202,7 +1628,7 @@ function isCursorOnSyntaxNode(state, node) {
   );
 }
 
-function isCursorOnHorizontalRule(state) {
+function isCursorOnHorizontalRule(state: EditorState): boolean {
   const selection = state.selection.main;
   if (!selection.empty) {
     return false;
@@ -1211,7 +1637,10 @@ function isCursorOnHorizontalRule(state) {
   return !!findDirectHorizontalRuleNodeAt(state, selection.from);
 }
 
-function getDeleteRangeForLine(state, line) {
+function getDeleteRangeForLine(
+  state: EditorState,
+  line: { from: number; to: number },
+): { from: number; to: number } {
   let from = line.from;
   let to = line.to;
 
@@ -1224,12 +1653,15 @@ function getDeleteRangeForLine(state, line) {
   return { from, to };
 }
 
-function findDirectHorizontalRuleNodeAt(state, position) {
+function findDirectHorizontalRuleNodeAt(
+  state: EditorState,
+  position: number,
+): SyntaxNode | null {
   const tree = syntaxTree(state);
   const candidate = Math.max(0, Math.min(state.doc.length, position));
 
-  for (const side of [-1, 1]) {
-    for (let node = tree.resolveInner(candidate, side); node; node = node.parent) {
+  for (const side of [-1, 1] as const) {
+    for (let node: SyntaxNode | null = tree.resolveInner(candidate, side); node; node = node.parent) {
       if (node.name === "HorizontalRule") {
         return node;
       }
@@ -1239,11 +1671,15 @@ function findDirectHorizontalRuleNodeAt(state, position) {
   return null;
 }
 
-function collectHorizontalRuleDeleteRanges(state, selection, preferNearby = false) {
-  const ranges = [];
-  const seenLines = new Set();
+function collectHorizontalRuleDeleteRanges(
+  state: EditorState,
+  selection: { from: number; to: number; empty: boolean },
+  preferNearby = false,
+): { from: number; to: number }[] {
+  const ranges: { from: number; to: number }[] = [];
+  const seenLines = new Set<number>();
 
-  const addLine = (line) => {
+  const addLine = (line: { text: string; number: number; from: number; to: number }): void => {
     if (!horizontalRulePattern.test(line.text) || seenLines.has(line.number)) {
       return;
     }
@@ -1251,7 +1687,7 @@ function collectHorizontalRuleDeleteRanges(state, selection, preferNearby = fals
     ranges.push(getDeleteRangeForLine(state, line));
   };
 
-  const addNodeAt = (position) => {
+  const addNodeAt = (position: number): void => {
     const node = findDirectHorizontalRuleNodeAt(state, position);
     if (node) {
       addLine(state.doc.lineAt(node.from));
@@ -1285,7 +1721,11 @@ function collectHorizontalRuleDeleteRanges(state, selection, preferNearby = fals
   return ranges;
 }
 
-function findHorizontalRuleDeleteRange(state, selection, preferNearby = false) {
+function findHorizontalRuleDeleteRange(
+  state: EditorState,
+  selection: { from: number; to: number; empty: boolean },
+  preferNearby = false,
+): { from: number; to: number } | null {
   const ranges = collectHorizontalRuleDeleteRanges(state, selection, preferNearby);
   if (!ranges.length) {
     return null;
@@ -1297,7 +1737,7 @@ function findHorizontalRuleDeleteRange(state, selection, preferNearby = false) {
   };
 }
 
-function toggleMarkdownWrap(delimiter) {
+function toggleMarkdownWrap(delimiter: string): (view: EditorView) => boolean {
   return (view) => {
     const selection = view.state.selection.main;
     if (selection.empty) {
@@ -1333,7 +1773,7 @@ function toggleMarkdownWrap(delimiter) {
   };
 }
 
-function backspaceHeadingMarker(view) {
+function backspaceHeadingMarker(view: EditorView): boolean {
   if (currentMode !== "rendered") {
     return false;
   }
@@ -1361,7 +1801,7 @@ function backspaceHeadingMarker(view) {
   return true;
 }
 
-function backspaceHorizontalRule(view) {
+function backspaceHorizontalRule(view: EditorView): boolean {
   if (currentMode !== "rendered") {
     return false;
   }
@@ -1383,7 +1823,7 @@ function backspaceHorizontalRule(view) {
   return true;
 }
 
-function backspaceTaskMarker(view) {
+function backspaceTaskMarker(view: EditorView): boolean {
   if (currentMode !== "rendered") {
     return false;
   }
@@ -1431,7 +1871,7 @@ function backspaceTaskMarker(view) {
   return false;
 }
 
-function backspaceRenderedMarkup(view) {
+function backspaceRenderedMarkup(view: EditorView): boolean {
   return (
     backspaceHorizontalRule(view) ||
     backspaceHeadingMarker(view) ||
@@ -1439,7 +1879,7 @@ function backspaceRenderedMarkup(view) {
   );
 }
 
-function continueTaskOrListMarkup(view) {
+function continueTaskOrListMarkup(view: EditorView): boolean {
   if (insertNewlineContinueMarkup(view)) {
     trimPendingListContinuation(view);
     return true;
@@ -1469,7 +1909,7 @@ function continueTaskOrListMarkup(view) {
   return true;
 }
 
-function trimPendingListContinuation(view) {
+function trimPendingListContinuation(view: EditorView): boolean {
   if (currentMode !== "rendered") {
     return false;
   }
@@ -1491,7 +1931,7 @@ function trimPendingListContinuation(view) {
   return true;
 }
 
-function selectedLines(state) {
+function selectedLines(state: EditorState) {
   const startLine = state.doc.lineAt(state.selection.main.from).number;
   const endLine = state.doc.lineAt(state.selection.main.to).number;
   const lines = [];
@@ -1501,9 +1941,9 @@ function selectedLines(state) {
   return lines;
 }
 
-function indentListSelection(view) {
+function indentListSelection(view: EditorView): boolean {
   const lines = selectedLines(view.state);
-  const changes = [];
+  const changes: { from: number; insert: string }[] = [];
   let touched = false;
 
   for (const line of lines) {
@@ -1521,9 +1961,9 @@ function indentListSelection(view) {
   return true;
 }
 
-function outdentListSelection(view) {
+function outdentListSelection(view: EditorView): boolean {
   const lines = selectedLines(view.state);
-  const changes = [];
+  const changes: { from: number; to: number; insert: string }[] = [];
   let touched = false;
 
   for (const line of lines) {
@@ -1542,7 +1982,7 @@ function outdentListSelection(view) {
   return true;
 }
 
-function maybeAutoAdvanceHorizontalRule(update) {
+function maybeAutoAdvanceHorizontalRule(update: ViewUpdate): boolean {
   if (currentMode !== "rendered" || !update.docChanged) {
     return false;
   }
@@ -1588,15 +2028,51 @@ function maybeAutoAdvanceHorizontalRule(update) {
 }
 
 const renderedDecorations = buildRenderedArtifactsField();
+const renderedLineNumbers = lineNumbers();
 const rawLineNumbers = lineNumbers();
 const rawActiveLineHighlights = [
   highlightActiveLine(),
   highlightActiveLineGutter(),
 ];
 
+function currentGutterExtension() {
+  if (currentMode === "raw") {
+    return rawLineNumbers;
+  }
+
+  return readerWidthEnabled ? renderedLineNumbers : [];
+}
+
+const renderedGutterToggle = ViewPlugin.fromClass(
+  class {
+    view: EditorView;
+    onClick: (e: MouseEvent) => void;
+
+    constructor(view: EditorView) {
+      this.view = view;
+      this.onClick = (e: MouseEvent) => {
+        const target = e.target as HTMLElement;
+        if (target.closest(".cm-gutters")) {
+          view.dom.classList.toggle("cm-gutter-pinned");
+        }
+      };
+      view.dom.addEventListener("click", this.onClick);
+    }
+
+    destroy() {
+      this.view.dom.removeEventListener("click", this.onClick);
+    }
+  },
+);
+
 const scrollLineIndicator = ViewPlugin.fromClass(
   class {
-    constructor(view) {
+    view: EditorView;
+    hideTimer: ReturnType<typeof setTimeout> | number;
+    badge: HTMLDivElement;
+    onScroll: () => void;
+
+    constructor(view: EditorView) {
       this.view = view;
       this.hideTimer = 0;
       this.badge = document.createElement("div");
@@ -1607,7 +2083,7 @@ const scrollLineIndicator = ViewPlugin.fromClass(
       view.scrollDOM.addEventListener("scroll", this.onScroll, { passive: true });
     }
 
-    show() {
+    show(): void {
       const view = this.view;
       const lineNum = getTopLineNumber(view);
 
@@ -1631,7 +2107,7 @@ const scrollLineIndicator = ViewPlugin.fromClass(
       }, 1200);
     }
 
-    destroy() {
+    destroy(): void {
       this.view.scrollDOM.removeEventListener("scroll", this.onScroll);
       clearTimeout(this.hideTimer);
       this.badge.remove();
@@ -1641,7 +2117,10 @@ const scrollLineIndicator = ViewPlugin.fromClass(
 
 const scrollOffsetReporter = ViewPlugin.fromClass(
   class {
-    constructor(view) {
+    lastReported: number;
+    onScroll: () => void;
+
+    constructor(view: EditorView) {
       this.lastReported = -1;
       this.onScroll = () => {
         const top = view.scrollDOM.scrollTop;
@@ -1657,7 +2136,7 @@ const scrollOffsetReporter = ViewPlugin.fromClass(
       requestAnimationFrame(() => this.onScroll());
     }
 
-    destroy() {
+    destroy(): void {
       // cleanup handled by CM
     }
   },
@@ -1665,13 +2144,15 @@ const scrollOffsetReporter = ViewPlugin.fromClass(
 
 const rawTerminalScroll = ViewPlugin.fromClass(
   class {
+    pendingWheelLines: number;
+
     constructor() {
       this.pendingWheelLines = 0;
     }
   },
   {
     eventHandlers: {
-      wheel(event, view) {
+      wheel(event: WheelEvent, view: EditorView) {
         if (currentMode !== "raw" || event.ctrlKey || !event.deltaY) {
           return false;
         }
@@ -1713,7 +2194,7 @@ const renderedLinkClicks = ViewPlugin.fromClass(
   class { },
   {
     eventHandlers: {
-      click(event) {
+      click(event: MouseEvent) {
         if (currentMode !== "rendered") {
           return false;
         }
@@ -1738,20 +2219,22 @@ const renderedLinkClicks = ViewPlugin.fromClass(
 
 const renderedCursorState = ViewPlugin.fromClass(
   class {
-    constructor(view) {
+    view: EditorView;
+
+    constructor(view: EditorView) {
       this.view = view;
       this.sync();
     }
 
-    update() {
+    update(): void {
       this.sync();
     }
 
-    destroy() {
+    destroy(): void {
       this.view.dom.classList.remove("cm-on-horizontal-rule");
     }
 
-    sync() {
+    sync(): void {
       this.view.dom.classList.toggle(
         "cm-on-horizontal-rule",
         currentMode === "rendered" && isCursorOnHorizontalRule(this.view.state),
@@ -1838,7 +2321,7 @@ const editorCommands = Prec.high(
   ]),
 );
 
-const updateListener = EditorView.updateListener.of((update) => {
+const updateListener = EditorView.updateListener.of((update: ViewUpdate) => {
   if (!update.docChanged) {
     return;
   }
@@ -1873,13 +2356,14 @@ const view = new EditorView({
       decorationCompartment.of(renderedDecorations),
       themeCompartment.of(renderedTheme),
       modeClassCompartment.of(modeClassExtension),
-      layoutClassCompartment.of([]),
-      gutterCompartment.of([]),
+      layoutClassCompartment.of(readerWidthClassExtension),
+      gutterCompartment.of(currentGutterExtension()),
       activeLineCompartment.of([]),
       scrollBehaviorCompartment.of([]),
       contentFingerprintPlugin,
       scrollOffsetReporter,
       scrollLineIndicator,
+      renderedGutterToggle,
       renderedCursorState,
       renderedLinkClicks,
       updateListener,
@@ -1890,7 +2374,7 @@ const view = new EditorView({
 
 let hasSetModeOnce = false;
 
-function setMode(mode) {
+function setMode(mode: string): void {
   const isInitial = !hasSetModeOnce;
   hasSetModeOnce = true;
 
@@ -1907,9 +2391,7 @@ function setMode(mode) {
       modeClassCompartment.reconfigure(
         currentMode === "rendered" ? modeClassExtension : rawModeClassExtension,
       ),
-      gutterCompartment.reconfigure(
-        currentMode === "rendered" ? [] : rawLineNumbers,
-      ),
+      gutterCompartment.reconfigure(currentGutterExtension()),
       activeLineCompartment.reconfigure(
         currentMode === "rendered" ? [] : rawActiveLineHighlights,
       ),
@@ -1925,7 +2407,7 @@ function setMode(mode) {
   }
 }
 
-function setText(text) {
+function setText(text: string): void {
   const nextText = text ?? "";
   const currentText = view.state.doc.toString();
   if (nextText === currentText) {
@@ -1942,11 +2424,11 @@ function setText(text) {
   });
 }
 
-function scrollToTop() {
+function scrollToTop(): void {
   view.scrollDOM.scrollTop = 0;
 }
 
-function setTheme(theme) {
+function setTheme(theme: string): void {
   document.documentElement.dataset.theme = theme === "dark" ? "dark" : "light";
   const light = document.getElementById("theme-light");
   const dark = document.getElementById("theme-dark");
@@ -1956,9 +2438,14 @@ function setTheme(theme) {
   if (dark instanceof HTMLLinkElement) {
     dark.disabled = theme !== "dark";
   }
+
+  // Redraw the mosaic with the new theme's colors
+  if (documentHeaderInstance) {
+    documentHeaderInstance.draw(view.state.doc.toString(), false);
+  }
 }
 
-function setTextScale(scale) {
+function setTextScale(scale: number | string): void {
   const numericScale = Number(scale);
   const nextScale = Number.isFinite(numericScale) ? numericScale : 1;
   const clampedScale = Math.min(maximumTextScale, Math.max(minimumTextScale, nextScale));
@@ -1966,21 +2453,25 @@ function setTextScale(scale) {
   view.requestMeasure();
 }
 
-function setReaderWidth(enabled) {
+function setReaderWidth(enabled: boolean): void {
+  readerWidthEnabled = enabled;
   view.dispatch({
-    effects: layoutClassCompartment.reconfigure(
-      enabled ? readerWidthClassExtension : [],
-    ),
+    effects: [
+      layoutClassCompartment.reconfigure(
+        enabled ? readerWidthClassExtension : [],
+      ),
+      gutterCompartment.reconfigure(currentGutterExtension()),
+    ],
   });
 }
 
-function setFileInfo(path, lastModified) {
+function setFileInfo(path: string, lastModified: string): void {
   if (documentHeaderInstance) {
     documentHeaderInstance.setFileInfo(path, lastModified);
   }
 }
 
-globalThis.editor = {
+(globalThis as unknown as Window).editor = {
   setText,
   getText() {
     return view.state.doc.toString();

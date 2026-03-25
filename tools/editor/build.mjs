@@ -6,7 +6,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 await build({
-  entryPoints: [path.join(__dirname, "src/editor.js")],
+  entryPoints: [path.join(__dirname, "src/editor.ts")],
   outfile: path.join(__dirname, "../../spectr/Resources/Editor/editor.js"),
   bundle: true,
   format: "iife",

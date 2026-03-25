@@ -49,12 +49,25 @@ body {
 }
 
 .cm-spectr-rendered .cm-scroller {
-  display: block !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start !important;
+}
+
+.cm-editor.cm-spectr-rendered.cm-spectr-reader-width .cm-scroller {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.cm-editor.cm-spectr-rendered:not(.cm-spectr-reader-width) .cm-scroller {
+  padding-left: 12px;
+  padding-right: 12px;
+  box-sizing: border-box;
 }
 
 .cm-document-header {
   display: block;
   width: 100%;
+  grid-column: 1 / -1;
   flex-shrink: 0;
   pointer-events: none;
 }
@@ -63,6 +76,8 @@ body {
   display: block;
   width: 100%;
   height: 234px;
+  pointer-events: auto;
+  cursor: default;
 }
 
 .cm-document-meta {
@@ -75,6 +90,7 @@ body {
   letter-spacing: 0.01em;
   color: var(--trim-color);
   opacity: 0.6;
+  pointer-events: auto;
 }
 
 .cm-document-meta-item {
@@ -86,15 +102,39 @@ body {
   opacity: 0.5;
 }
 
+.cm-document-meta-copyable {
+  cursor: pointer;
+  pointer-events: auto;
+  transition: opacity 0.15s;
+}
+
+.cm-document-meta-copyable:hover {
+  opacity: 1;
+}
+
+.cm-document-meta-copyable::after {
+  content: "";
+  transition: opacity 0.2s;
+  opacity: 0;
+}
+
+.cm-document-meta-copyable.cm-meta-copied::after {
+  content: "✓ Copied";
+  opacity: 1;
+  margin-left: 6px;
+}
+
 
 .cm-spectr-raw .cm-document-header {
   display: none;
 }
 
 .cm-editor.cm-spectr-rendered .cm-content {
+  width: 100%;
+  min-width: 0;
   max-width: none;
   margin: 0;
-  padding: 20px 16px 80px;
+  padding: 20px 0 80px;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
   font-size: calc(var(--spectr-rendered-font-size) * var(--spectr-text-scale));
   line-height: 1.72;
@@ -183,6 +223,45 @@ body {
   background-color: transparent;
   color: var(--text-primary);
   opacity: 1;
+}
+
+.cm-editor.cm-spectr-rendered .cm-gutters {
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  padding: 0 0 0 4px;
+  opacity: 0;
+  transition: opacity 200ms ease;
+  cursor: pointer;
+}
+
+.cm-editor.cm-spectr-rendered.cm-spectr-reader-width .cm-gutters {
+  padding-left: 10px;
+  padding-right: 14px;
+}
+
+.cm-editor.cm-spectr-rendered .cm-gutters:hover {
+  opacity: 0.3;
+}
+
+.cm-editor.cm-spectr-rendered.cm-gutter-pinned .cm-gutters {
+  opacity: 0.5;
+}
+
+.cm-editor.cm-spectr-rendered.cm-gutter-pinned .cm-gutters:hover {
+  opacity: 0.6;
+}
+
+.cm-editor.cm-spectr-rendered.cm-spectr-reader-width .cm-lineNumbers .cm-gutterElement {
+  min-width: 0;
+  padding: 0 2ch 0 0;
+  font-family: "SF Mono", SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 0.7em;
+  line-height: inherit;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .cm-editor.cm-spectr-rendered .cm-line.cm-heading-1 {

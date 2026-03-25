@@ -1,53 +1,47 @@
 # Spectr
 
-## The Ambient Thinking Layer
-
-*A Vision*
-
----
+## The Most Beautiful Way to Read Markdown on a Mac
 
 *Cloud Nine — March 2026*
 
 ---
 
-## The World We Build For
-
-There is a growing class of developer who works spec-first. They write before they code. They think in documents — product specs, architecture notes, decision logs — and those documents drive everything downstream: what gets built, how it gets built, what gets rejected.
-
-Their workflow has a shape: a terminal for execution, an editor for creation, and somewhere in between, the thinking. The specs. The reference material. The living document that keeps the work honest.
-
-Today that "somewhere" is the editor itself. The same tool used to write code is used to read specs. Tabs compete. Context switches. The spec gets buried behind implementation files, and the thinking layer disappears into the noise.
-
 ## The Problem
 
-Specs don't belong in your editor. They aren't code. They deserve their own space — visible, accessible, calm. But nothing exists for this. You either open a markdown file in VSCode (where it fights for attention with forty other tabs), preview it in a browser (where it feels disconnected), or print it (where it can't change).
+Markdown is everywhere. READMEs, specs, changelogs, docs, notes — developers live in `.md` files. And every tool that opens them treats them as an afterthought. VSCode renders markdown in a cramped preview pane. GitHub's renderer is fine but disconnected. Obsidian is a whole universe when you just want to read a file. Typora is functional but forgettable.
 
-The developer's thinking layer has no home.
+Nothing makes markdown feel *good*.
+
+There is no app on macOS that opens a `.md` file and makes you think, "this is beautiful." No app that treats a markdown document the way a book designer treats a manuscript — with real typography, real spacing, real presence.
 
 ## The Vision
 
-Spectr is the thinking pane. A native macOS window that sits beside your terminal, always showing the spec you're working against. You glance at it. You refine a line. You switch back to your terminal. It's still there.
+Spectr is what happens when you care about how markdown looks.
 
-It is not an editor. It is not a knowledge base. It is not a second brain. It is a single pane of glass between your thoughts and your execution — quiet enough to ignore, present enough to reference, light enough to keep open all day.
+Open a file. It's beautiful. Edit a line. Save. That's the whole product.
 
-The name says it: a specter lingers. It doesn't demand attention. It doesn't interrupt. It watches. It's there when you look for it. That is the entire product philosophy.
+No workspace. No project. No sync. No plugins. No graph view. Just a file on your disk, rendered with taste, in a window you can pin beside your terminal.
+
+The reference point is Raycast Notes — the feeling of opening something that is calm, minimal, and crafted. But Raycast Notes is a scratchpad. Spectr is for real files. Your READMEs. Your specs. Your docs. The files that already exist in your repos, opened in a surface that finally does them justice.
 
 ## Core Beliefs
 
-**Specs are first-class artifacts.** They deserve a dedicated surface, not a tab in a code editor. If the spec is important enough to write, it's important enough to see.
+**Markdown deserves beauty.** It's the most common document format in software. It deserves a dedicated, beautiful surface — not a preview pane in a code editor.
 
-**Presence without intrusion.** The best tool for sustained reference is one you forget is running. Spectr should feel like a document on your desk, not an application on your screen.
+**Feeling is the feature.** Spectr doesn't compete on functionality. Every markdown editor has the same features. Spectr competes on how it feels to use. The typography. The spacing. The quiet. The polish.
 
-**The document is the interface.** There is no app to learn. There is a document to read. Every pixel of UI chrome that isn't the document is a failure of restraint.
+**Less is the product.** No sidebar. No file tree. No plugin system. No settings page with forty toggles. Every feature that isn't "open a file and it looks incredible" dilutes the product.
 
-**Native means native.** Spectr should feel like it shipped with the Mac. Not a web view in a frame. Not an Electron app wearing a disguise. Real typography. Real windows. Real system behavior.
-
-**Simplicity is the feature.** The temptation will always be to add more — a sidebar, a file tree, a plugin system, a collaboration layer. Every addition makes Spectr less of what it is. The constraint is the product.
+**Native means native.** Spectr should feel like it shipped with the Mac. Real windows. Real system behavior. Not a web app in a frame.
 
 ## What Success Looks Like
 
-A developer opens Spectr once in the morning and doesn't close it until they close their laptop. They barely notice it. They glance at it dozens of times. They tweak a line or two. They never think about it as a tool — it's just where the spec lives.
+Someone opens a markdown file in Spectr for the first time and their reaction is: "Why doesn't everything look like this?"
 
-If Spectr ever feels like "an app you have to deal with," it has failed. If it ever competes with the terminal or editor for attention, it has failed. If it ever makes you think about Spectr instead of thinking about your work, it has failed.
+They screenshot it and post it on X. Not because of a feature — because it looks good. The product markets itself through the quality of its output.
 
-The goal is ambient utility. Always there. Never in the way.
+They keep it open. They pin it beside their terminal. They forget it's there until they glance at it and appreciate, again, that their docs look this clean.
+
+If Spectr ever feels like "a tool you have to configure," it has failed. If it ever looks like every other markdown app, it has failed. If nobody screenshots it, it has failed.
+
+The goal is beauty. Quiet, functional, undeniable beauty.

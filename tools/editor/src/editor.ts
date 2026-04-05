@@ -136,6 +136,8 @@ const setLiveChangeLinesEffect = StateEffect.define<readonly number[]>();
 const clearLiveChangeLinesEffect = StateEffect.define<void>();
 const setBlurLinesEffect = StateEffect.define<readonly number[]>();
 const clearBlurLinesEffect = StateEffect.define<void>();
+const setHeightSpacerEffect = StateEffect.define<{ pos: number; height: number }>();
+const clearHeightSpacerEffect = StateEffect.define<void>();
 const decorationCompartment = new Compartment();
 const themeCompartment = new Compartment();
 const modeClassCompartment = new Compartment();
@@ -256,6 +258,91 @@ const liveChangeBlurField = StateField.define<DecorationSet>({
         value = Decoration.none;
       } else if (effect.is(setBlurLinesEffect)) {
         value = buildBlurDecorations(transaction.state, effect.value);
+      }
+    }
+
+    return value;
+  },
+  provide(field) {
+    return EditorView.decorations.from(field);
+  },
+});
+
+class HeightSpacerWidget extends WidgetType {
+  // Positive = collapse spacer (fills gap from removed lines, shrinks to 0)
+  // Negative = expand spacer (absorbs added height via negative margin, releases to 0)
+  private readonly delta: number;
+
+  constructor(delta: number) {
+    super();
+    this.delta = delta;
+  }
+
+  get estimatedHeight(): number {
+    return this.delta > 0 ? this.delta : 0;
+  }
+
+  eq(other: HeightSpacerWidget): boolean {
+    return this.delta === other.delta;
+  }
+
+  toDOM(): HTMLElement {
+    const el = document.createElement("div");
+    el.className = "cm-height-spacer";
+    el.style.overflow = "hidden";
+    el.style.pointerEvents = "none";
+
+    if (this.delta > 0) {
+      // Collapse: start at full height, shrink to 0.
+      el.style.height = `${this.delta}px`;
+      el.style.transition = "height 700ms cubic-bezier(0.2, 1, 0.3, 1)";
+      requestAnimationFrame(() => {
+        el.style.height = "0px";
+      });
+    } else {
+      // Expand: start with negative margin that eats the added space,
+      // then release to 0 so content below slides down.
+      const absorb = this.delta; // negative value
+      el.style.height = "0px";
+      el.style.marginBottom = `${absorb}px`;
+      el.style.transition = "margin-bottom 700ms cubic-bezier(0.2, 1, 0.3, 1)";
+      requestAnimationFrame(() => {
+        el.style.marginBottom = "0px";
+      });
+    }
+
+    return el;
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+const heightSpacerField = StateField.define<DecorationSet>({
+  create() {
+    return Decoration.none;
+  },
+  update(value, transaction) {
+    value = value.map(transaction.changes);
+
+    for (const effect of transaction.effects) {
+      if (effect.is(clearHeightSpacerEffect)) {
+        value = Decoration.none;
+      } else if (effect.is(setHeightSpacerEffect)) {
+        const { pos, height } = effect.value;
+        if (height !== 0) {
+          const clampedPos = Math.min(pos, transaction.state.doc.length);
+          value = Decoration.set([
+            Decoration.widget({
+              widget: new HeightSpacerWidget(height),
+              block: true,
+              side: 1,
+            }).range(clampedPos),
+          ]);
+        } else {
+          value = Decoration.none;
+        }
       }
     }
 
@@ -961,11 +1048,19 @@ function captureViewportAnchor(view: EditorView): ViewportAnchor {
   };
 }
 
+let activeScrollAnimation: number | null = null;
+
 function restoreViewportAnchor(
   view: EditorView,
   anchor: ViewportAnchor,
   mappedPosition: number,
+  smooth = false,
 ): void {
+  if (activeScrollAnimation !== null) {
+    cancelAnimationFrame(activeScrollAnimation);
+    activeScrollAnimation = null;
+  }
+
   const scroller = view.scrollDOM;
   const clampedPosition = clamp(mappedPosition, 0, view.state.doc.length);
   const block = view.lineBlockAt(clampedPosition);
@@ -976,7 +1071,38 @@ function restoreViewportAnchor(
     maxScrollTop,
   );
 
-  scroller.scrollTop = targetScrollTop;
+  if (!smooth) {
+    scroller.scrollTop = targetScrollTop;
+    return;
+  }
+
+  const startScrollTop = scroller.scrollTop;
+  const delta = targetScrollTop - startScrollTop;
+
+  // Skip animation for tiny or zero differences.
+  if (Math.abs(delta) < 2) {
+    scroller.scrollTop = targetScrollTop;
+    return;
+  }
+
+  const duration = 300;
+  const start = performance.now();
+
+  function tick(now: number): void {
+    const elapsed = now - start;
+    const t = Math.min(1, elapsed / duration);
+    // Apple spring-like curve: fast attack, smooth settle
+    const ease = 1 - Math.pow(1 - t, 3);
+    scroller.scrollTop = startScrollTop + delta * ease;
+
+    if (t < 1) {
+      activeScrollAnimation = requestAnimationFrame(tick);
+    } else {
+      activeScrollAnimation = null;
+    }
+  }
+
+  activeScrollAnimation = requestAnimationFrame(tick);
 }
 
 function splitLines(text: string): LineSlice[] {
@@ -2956,6 +3082,7 @@ const view = new EditorView({
       scrollBehaviorCompartment.of([]),
       liveChangeHighlightField,
       liveChangeBlurField,
+      heightSpacerField,
       contentFingerprintPlugin,
       scrollOffsetReporter,
       scrollLineIndicator,
@@ -2985,6 +3112,7 @@ function cancelPendingLiveChangeTimers(): void {
     effects: [
       clearLiveChangeLinesEffect.of(),
       clearBlurLinesEffect.of(),
+      clearHeightSpacerEffect.of(),
     ],
   });
 }
@@ -3081,7 +3209,7 @@ function applyExternalTextChange(previousText: string, text: string): void {
     const mappedAnchorPosition = preTransaction.changes.mapPos(anchor.position, -1);
     view.dispatch(preTransaction);
     requestAnimationFrame(() => {
-      restoreViewportAnchor(view, anchor, mappedAnchorPosition);
+      restoreViewportAnchor(view, anchor, mappedAnchorPosition, true);
     });
     return;
   }
@@ -3107,6 +3235,11 @@ function applyExternalTextChange(previousText: string, text: string): void {
       return;
     }
 
+    // Capture scroll height before transaction to compute delta.
+    const scroller = view.scrollDOM;
+    const scrollTopBefore = scroller.scrollTop;
+    const scrollHeightBefore = scroller.scrollHeight;
+
     const anchor = captureViewportAnchor(view);
     const transaction = view.state.update({
       annotations: fromSwiftAnnotation.of(true),
@@ -3117,6 +3250,41 @@ function applyExternalTextChange(previousText: string, text: string): void {
 
     view.dispatch(transaction);
 
+    // Immediately prevent the browser from clamping scrollTop when
+    // the document got shorter. Hold position until the spacer fills the gap.
+    scroller.scrollTop = scrollTopBefore;
+
+    // Compute the height delta synchronously before the browser paints.
+    const scrollHeightAfter = scroller.scrollHeight;
+    const heightDelta = scrollHeightAfter - scrollHeightBefore;
+
+    // Insert the spacer widget synchronously so there's never a frame
+    // where the height gap exists without compensation.
+    if (Math.abs(heightDelta) > 2) {
+      const lastChangedLine = newLineNumbers.length
+        ? newLineNumbers[newLineNumbers.length - 1]
+        : 1;
+      const spacerPos = Math.min(
+        view.state.doc.line(Math.min(lastChangedLine, view.state.doc.lines)).to,
+        view.state.doc.length,
+      );
+
+      view.dispatch({
+        effects: setHeightSpacerEffect.of({
+          pos: spacerPos,
+          height: -heightDelta,
+        }),
+      });
+      view.requestMeasure();
+
+      // Clear spacer after animation completes.
+      setTimeout(() => {
+        view.dispatch({ effects: clearHeightSpacerEffect.of() });
+        view.requestMeasure();
+      }, 750);
+    }
+
+    // Now restore the anchor properly with the spacer in place.
     requestAnimationFrame(() => {
       restoreViewportAnchor(view, anchor, mappedAnchorPosition);
 

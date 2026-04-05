@@ -20,6 +20,6 @@
   --comment-highlight-bg: color-mix(in srgb, var(--trim-color) 12%, transparent);
   --comment-highlight-border: color-mix(in srgb, var(--trim-color) 36%, transparent);
   --comment-resolve-hover-bg: rgba(255, 255, 255, 0.08);
-  --live-change-highlight-bg: color-mix(in srgb, var(--trim-color) 16%, transparent);
-  --live-change-highlight-border: color-mix(in srgb, var(--trim-color) 36%, transparent);
+  --live-change-highlight-bg: color-mix(in srgb, var(--trim-color) 8%, transparent);
+  --live-change-highlight-border: color-mix(in srgb, var(--trim-color) 18%, transparent);
 }

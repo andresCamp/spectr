@@ -65,7 +65,6 @@ struct DocumentView: View {
 
             EditorWebView(
                 text: $document.text,
-                liveChange: fileSyncController.liveChange,
                 mode: viewMode,
                 colorScheme: colorScheme,
                 zoomController: editorZoomController,

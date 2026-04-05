@@ -71,7 +71,6 @@ final class ZoomableEditorScrollView: NSScrollView {
 
 struct EditorWebView: NSViewRepresentable {
     @Binding var text: String
-    var liveChange: LiveExternalChange?
     var mode: ViewMode
     var colorScheme: ColorScheme
     var zoomController: EditorZoomController
@@ -157,7 +156,7 @@ struct EditorWebView: NSViewRepresentable {
         private var editorErrorCount = 0
         var lastKnownReloadToken = 0
         private var lastKnownText: String
-        private var lastKnownLiveChangeID: LiveExternalChange.ID?
+        private var lastChangeWasLocal = false
         private var lastKnownMode: ViewMode?
         private var lastKnownTheme: String?
         private var lastKnownTextScale: CGFloat?
@@ -231,17 +230,20 @@ struct EditorWebView: NSViewRepresentable {
                 pushTheme(theme, into: webView)
             }
 
-            if !force,
-               let liveChange = parent.liveChange,
-               liveChange.id != lastKnownLiveChangeID,
-               parent.text == liveChange.text
-            {
-                lastKnownLiveChangeID = liveChange.id
+            if force || parent.text != lastKnownText {
+                let previousText = lastKnownText
+                let wasLocal = lastChangeWasLocal
                 lastKnownText = parent.text
-                pushExternalTextChange(liveChange, into: webView)
-            } else if force || parent.text != lastKnownText {
-                lastKnownText = parent.text
-                pushText(parent.text, into: webView)
+                lastChangeWasLocal = false
+
+                // If the text changed but wasn't from a local edit (textChanged
+                // message), it came from NSDocument reverting from disk — treat
+                // it as an external change with diff animation.
+                if !force && !wasLocal {
+                    pushExternalTextChange(previousText: previousText, text: parent.text, into: webView)
+                } else {
+                    pushText(parent.text, into: webView)
+                }
             }
 
             if force || lastKnownMode != parent.mode {
@@ -293,6 +295,7 @@ struct EditorWebView: NSViewRepresentable {
             case .textChanged:
                 guard let text = message.body as? String else { return }
                 lastKnownText = text
+                lastChangeWasLocal = true
                 DispatchQueue.main.async {
                     self.parent.text = text
                 }
@@ -363,12 +366,12 @@ struct EditorWebView: NSViewRepresentable {
             )
         }
 
-        private func pushExternalTextChange(_ change: LiveExternalChange, into webView: WKWebView) {
+        private func pushExternalTextChange(previousText: String, text: String, into webView: WKWebView) {
             evaluate(
                 "editor.applyExternalTextChange(previousText, text)",
                 arguments: [
-                    "previousText": change.previousText,
-                    "text": change.text,
+                    "previousText": previousText,
+                    "text": text,
                 ],
                 in: webView
             )

@@ -10,12 +10,6 @@ import Combine
 import Foundation
 import SwiftUI
 
-struct LiveExternalChange: Identifiable, Equatable {
-    let id = UUID()
-    let previousText: String
-    let text: String
-}
-
 @MainActor
 final class DocumentFileSyncController: ObservableObject {
     struct Conflict: Identifiable {
@@ -23,7 +17,6 @@ final class DocumentFileSyncController: ObservableObject {
     }
 
     @Published private(set) var conflict: Conflict?
-    @Published private(set) var liveChange: LiveExternalChange?
 
     private weak var appKitDocument: NSDocument?
     private var textBinding: Binding<String>?
@@ -37,7 +30,6 @@ final class DocumentFileSyncController: ObservableObject {
         appKitDocument = nil
         textBinding = nil
         conflict = nil
-        liveChange = nil
     }
 
     func configure(
@@ -53,7 +45,6 @@ final class DocumentFileSyncController: ObservableObject {
 
         monitoredFileURL = normalizedURL
         conflict = nil
-        liveChange = nil
         fileMonitor?.invalidate()
         fileMonitor = nil
 
@@ -71,132 +62,44 @@ final class DocumentFileSyncController: ObservableObject {
 
     func reloadFromDisk() {
         conflict = nil
-        liveChange = nil
-
-        guard let document = appKitDocument else {
-            applyFileContentsDirectly()
-            return
-        }
-
-        guard let fileURL = document.fileURL, let fileType = document.fileType else {
-            applyFileContentsDirectly()
-            return
-        }
-
-        do {
-            try document.revert(toContentsOf: fileURL, ofType: fileType)
-        } catch {
-            applyFileContentsDirectly()
-        }
+        revertDocument()
     }
 
     func keepLocalChanges() {
         conflict = nil
-        liveChange = nil
-    }
-
-    func applyLiveExternalChange(_ diskText: String) {
-        guard let textBinding else { return }
-
-        let previousText = textBinding.wrappedValue
-        guard diskText != previousText else {
-            liveChange = nil
-            conflict = nil
-            return
-        }
-
-        conflict = nil
-        let liveChange = LiveExternalChange(previousText: previousText, text: diskText)
-
-        guard let appKitDocument else {
-            self.liveChange = liveChange
-            textBinding.wrappedValue = diskText
-            return
-        }
-
-        let modificationDate = monitoredFileURL.flatMap(Self.modificationDate(at:))
-        appKitDocument.performSynchronousFileAccess {
-            self.liveChange = liveChange
-            textBinding.wrappedValue = diskText
-
-            // Mirror the bookkeeping that revert performs so AppKit no longer
-            // thinks autosave is racing against a foreign disk version.
-            if let modificationDate {
-                appKitDocument.fileModificationDate = modificationDate
-            }
-            appKitDocument.updateChangeCount(.changeCleared)
-        }
     }
 
     private func handleFileMonitorEvent(_ event: PresentedTextFileMonitor.Event) {
         switch event {
-        case .changed(let fileURL):
-            handlePresentedItemChange(at: fileURL)
+        case .changed:
+            handlePresentedItemChange()
         case .moved(let fileURL):
             monitoredFileURL = fileURL.standardizedFileURL
         }
     }
 
-    private func handlePresentedItemChange(at fileURL: URL) {
-        guard let textBinding else { return }
-
-        guard let diskText = try? Self.readText(at: fileURL) else { return }
-        guard diskText != textBinding.wrappedValue else {
-            conflict = nil
-            liveChange = nil
-            return
-        }
-
+    private func handlePresentedItemChange() {
+        // If the user has unsaved local edits, show a conflict dialog
+        // instead of silently reverting.
         if appKitDocument?.hasUnautosavedChanges == true {
-            liveChange = nil
             conflict = Conflict()
             return
         }
 
-        applyLiveExternalChange(diskText)
+        // Let NSDocument handle all file coordination and bookkeeping.
+        // The coordinator will detect the text change as external and animate it.
+        revertDocument()
     }
 
-    private func applyFileContentsDirectly() {
-        guard let monitoredFileURL else { return }
-        guard let diskText = try? Self.readText(at: monitoredFileURL) else { return }
+    private func revertDocument() {
+        guard let document = appKitDocument else { return }
+        guard let fileURL = document.fileURL, let fileType = document.fileType else { return }
 
-        textBinding?.wrappedValue = diskText
-    }
-
-    private static func readText(at fileURL: URL) throws -> String {
-        var readError: Error?
-        var coordinatedData: Data?
-        var coordinationError: NSError?
-
-        let coordinator = NSFileCoordinator(filePresenter: nil)
-        coordinator.coordinate(readingItemAt: fileURL, options: [], error: &coordinationError) { coordinatedURL in
-            do {
-                coordinatedData = try Data(contentsOf: coordinatedURL)
-            } catch {
-                readError = error
-            }
+        do {
+            try document.revert(toContentsOf: fileURL, ofType: fileType)
+        } catch {
+            // Revert failed — leave current content in place.
         }
-
-        if let coordinationError {
-            throw coordinationError
-        }
-
-        if let readError {
-            throw readError
-        }
-
-        guard
-            let coordinatedData,
-            let text = String(data: coordinatedData, encoding: .utf8)
-        else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-
-        return text
-    }
-
-    private static func modificationDate(at fileURL: URL) -> Date? {
-        (try? FileManager.default.attributesOfItem(atPath: fileURL.path(percentEncoded: false)))?[.modificationDate] as? Date
     }
 }
 

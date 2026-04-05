@@ -134,6 +134,8 @@ const fromSwiftAnnotation: AnnotationType<boolean> = Annotation.define<boolean>(
 const autoAdvanceHorizontalRuleAnnotation: AnnotationType<boolean> = Annotation.define<boolean>();
 const setLiveChangeLinesEffect = StateEffect.define<readonly number[]>();
 const clearLiveChangeLinesEffect = StateEffect.define<void>();
+const setBlurLinesEffect = StateEffect.define<readonly number[]>();
+const clearBlurLinesEffect = StateEffect.define<void>();
 const decorationCompartment = new Compartment();
 const themeCompartment = new Compartment();
 const modeClassCompartment = new Compartment();
@@ -166,7 +168,8 @@ const blockedLineWidgetContexts = new Set([
 const minimumTextScale = 11 / 15;
 const maximumTextScale = 2;
 const maximumLiveChangeDiffCells = 600_000;
-const liveChangeHighlightDurationMs = 2_200;
+const liveChangeBlurDurationMs = 620;
+const liveChangeFadeInDurationMs = 3_200;
 
 function buildLiveChangeDecorations(
   state: EditorState,
@@ -181,10 +184,12 @@ function buildLiveChangeDecorations(
     }
 
     seen.add(lineNumber);
+    const line = state.doc.line(lineNumber);
+    if (line.length === 0) {
+      continue;
+    }
     decorations.push(
-      Decoration.line({ class: "cm-live-change-line" }).range(
-        state.doc.line(lineNumber).from,
-      ),
+      Decoration.line({ class: "cm-live-change-line" }).range(line.from),
     );
   }
 
@@ -203,6 +208,54 @@ const liveChangeHighlightField = StateField.define<DecorationSet>({
         value = Decoration.none;
       } else if (effect.is(setLiveChangeLinesEffect)) {
         value = buildLiveChangeDecorations(transaction.state, effect.value);
+      }
+    }
+
+    return value;
+  },
+  provide(field) {
+    return EditorView.decorations.from(field);
+  },
+});
+
+function buildBlurDecorations(
+  state: EditorState,
+  lineNumbers: readonly number[],
+): DecorationSet {
+  const decorations: Range<Decoration>[] = [];
+  const seen = new Set<number>();
+
+  for (const lineNumber of lineNumbers) {
+    if (lineNumber < 1 || lineNumber > state.doc.lines || seen.has(lineNumber)) {
+      continue;
+    }
+
+    seen.add(lineNumber);
+    const line = state.doc.line(lineNumber);
+    if (line.length === 0) {
+      continue;
+    }
+    // Mark decoration on the text content (not the full line)
+    decorations.push(
+      Decoration.mark({ class: "cm-live-change-blur" }).range(line.from, line.to),
+    );
+  }
+
+  return Decoration.set(decorations, true);
+}
+
+const liveChangeBlurField = StateField.define<DecorationSet>({
+  create() {
+    return Decoration.none;
+  },
+  update(value, transaction) {
+    value = value.map(transaction.changes);
+
+    for (const effect of transaction.effects) {
+      if (effect.is(clearBlurLinesEffect)) {
+        value = Decoration.none;
+      } else if (effect.is(setBlurLinesEffect)) {
+        value = buildBlurDecorations(transaction.state, effect.value);
       }
     }
 
@@ -1154,6 +1207,37 @@ function visibleLineRange(view: EditorView): { start: number; end: number } {
 function visibleChangedLineNumbers(view: EditorView, lineNumbers: readonly number[]): number[] {
   const { start, end } = visibleLineRange(view);
   return lineNumbers.filter((lineNumber) => lineNumber >= start && lineNumber <= end);
+}
+
+function sourceChangedLineNumbers(
+  state: EditorState,
+  changes: {
+    iterChanges(
+      callback: (
+        fromA: number,
+        toA: number,
+        fromB: number,
+        toB: number,
+      ) => void,
+    ): void;
+  },
+): number[] {
+  const lines = new Set<number>();
+
+  changes.iterChanges((fromA, toA) => {
+    if (fromA === toA) {
+      lines.add(state.doc.lineAt(Math.min(fromA, state.doc.length)).number);
+      return;
+    }
+
+    const startLine = state.doc.lineAt(fromA).number;
+    const endLine = state.doc.lineAt(Math.max(fromA, toA - 1)).number;
+    for (let lineNumber = startLine; lineNumber <= endLine; lineNumber += 1) {
+      lines.add(lineNumber);
+    }
+  });
+
+  return [...lines].sort((left, right) => left - right);
 }
 
 function addReplacement(
@@ -2871,6 +2955,7 @@ const view = new EditorView({
       activeLineCompartment.of([]),
       scrollBehaviorCompartment.of([]),
       liveChangeHighlightField,
+      liveChangeBlurField,
       contentFingerprintPlugin,
       scrollOffsetReporter,
       scrollLineIndicator,
@@ -2884,17 +2969,35 @@ const view = new EditorView({
 });
 
 let hasSetModeOnce = false;
-let liveChangeHighlightTimer: number | null = null;
+let liveChangeFadeTimer: number | null = null;
+let liveChangeBlurTimer: number | null = null;
 
-function scheduleLiveChangeHighlightClear(): void {
-  if (liveChangeHighlightTimer !== null) {
-    window.clearTimeout(liveChangeHighlightTimer);
+function cancelPendingLiveChangeTimers(): void {
+  if (liveChangeFadeTimer !== null) {
+    window.clearTimeout(liveChangeFadeTimer);
+    liveChangeFadeTimer = null;
+  }
+  if (liveChangeBlurTimer !== null) {
+    window.clearTimeout(liveChangeBlurTimer);
+    liveChangeBlurTimer = null;
+  }
+  view.dispatch({
+    effects: [
+      clearLiveChangeLinesEffect.of(),
+      clearBlurLinesEffect.of(),
+    ],
+  });
+}
+
+function scheduleFadeInClear(): void {
+  if (liveChangeFadeTimer !== null) {
+    window.clearTimeout(liveChangeFadeTimer);
   }
 
-  liveChangeHighlightTimer = window.setTimeout(() => {
-    liveChangeHighlightTimer = null;
+  liveChangeFadeTimer = window.setTimeout(() => {
+    liveChangeFadeTimer = null;
     view.dispatch({ effects: clearLiveChangeLinesEffect.of() });
-  }, liveChangeHighlightDurationMs);
+  }, liveChangeFadeInDurationMs);
 }
 
 function setMode(mode: string): void {
@@ -2954,35 +3057,80 @@ function applyExternalTextChange(previousText: string, text: string): void {
     return;
   }
 
+  // Cancel any in-progress live change animation.
+  cancelPendingLiveChangeTimers();
+
+  // Compute replacements against current text. We store the raw nextText
+  // so we can rebuild the transaction fresh after the blur phase.
   const replacements = computeLineReplacements(currentText, nextText);
   if (!replacements.length) {
     return;
   }
 
-  const anchor = captureViewportAnchor(view);
-  const transaction = view.state.update({
+  // Pre-compute which OLD lines will change so we can blur them.
+  const preTransaction = view.state.update({
     annotations: fromSwiftAnnotation.of(true),
     changes: replacements,
   });
-  const mappedAnchorPosition = transaction.changes.mapPos(anchor.position, -1);
-  const lineNumbers = changedLineNumbers(transaction.state, transaction.changes);
+  const oldLineNumbers = sourceChangedLineNumbers(view.state, preTransaction.changes);
+  const visibleOldLines = visibleChangedLineNumbers(view, oldLineNumbers);
 
-  view.dispatch(transaction);
+  if (!visibleOldLines.length) {
+    // No visible changes — apply instantly, no animation.
+    const anchor = captureViewportAnchor(view);
+    const mappedAnchorPosition = preTransaction.changes.mapPos(anchor.position, -1);
+    view.dispatch(preTransaction);
+    requestAnimationFrame(() => {
+      restoreViewportAnchor(view, anchor, mappedAnchorPosition);
+    });
+    return;
+  }
 
-  requestAnimationFrame(() => {
-    restoreViewportAnchor(view, anchor, mappedAnchorPosition);
+  // Phase 1: Blur the OLD lines that are about to change.
+  view.dispatch({
+    effects: setBlurLinesEffect.of(visibleOldLines),
+  });
 
-    const visibleLines = visibleChangedLineNumbers(view, lineNumbers);
-    if (!visibleLines.length) {
-      view.dispatch({ effects: clearLiveChangeLinesEffect.of() });
+  // Phase 2: After blur completes, rebuild transaction from current state,
+  // swap text, and fade in new content.
+  liveChangeBlurTimer = window.setTimeout(() => {
+    liveChangeBlurTimer = null;
+
+    // Clear blur decorations.
+    view.dispatch({ effects: clearBlurLinesEffect.of() });
+
+    // Recompute replacements against the current state (which now includes
+    // the blur decoration changes but same document text).
+    const freshCurrentText = view.state.doc.toString();
+    const freshReplacements = computeLineReplacements(freshCurrentText, nextText);
+    if (!freshReplacements.length) {
       return;
     }
 
-    view.dispatch({
-      effects: setLiveChangeLinesEffect.of(visibleLines),
+    const anchor = captureViewportAnchor(view);
+    const transaction = view.state.update({
+      annotations: fromSwiftAnnotation.of(true),
+      changes: freshReplacements,
     });
-    scheduleLiveChangeHighlightClear();
-  });
+    const mappedAnchorPosition = transaction.changes.mapPos(anchor.position, -1);
+    const newLineNumbers = changedLineNumbers(transaction.state, transaction.changes);
+
+    view.dispatch(transaction);
+
+    requestAnimationFrame(() => {
+      restoreViewportAnchor(view, anchor, mappedAnchorPosition);
+
+      const visibleNewLines = visibleChangedLineNumbers(view, newLineNumbers);
+      if (!visibleNewLines.length) {
+        return;
+      }
+
+      view.dispatch({
+        effects: setLiveChangeLinesEffect.of(visibleNewLines),
+      });
+      scheduleFadeInClear();
+    });
+  }, liveChangeBlurDurationMs);
 
   if (previousText !== currentText) {
     console.warn("[Spectr Editor] External change baseline drifted before apply.");
